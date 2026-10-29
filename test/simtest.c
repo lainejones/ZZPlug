@@ -263,7 +263,7 @@ int main(void)
             n2 = zzp_padmap_order_for(0x081f, 0xe401, order);
             CHECK(n2 == 4 && zzp_padmap_reorder(&pm, order, n2) == 4, "the 081F:E401 pad has a known layout");
             s = zzp_pad_state(&pm, leftup_a, 8, &bt);       /* HID button 1 = the top face button */
-            CHECK((s & (PAD_GREEN | PAD_RED)) == PAD_GREEN, "after reordering, its top button is green and not fire");
+            CHECK((s & (PAD_BLUE | PAD_GREEN | PAD_RED)) == PAD_BLUE, "after reordering, its top (blue-cap) button is blue and not fire");
         }
     }
 
