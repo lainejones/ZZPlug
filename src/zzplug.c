@@ -6,6 +6,7 @@
  *   ZZPlug [LIST] [VERBOSE]      what is plugged into the ZZ9000's USB port
  *   ZZPlug START [QUIET]         run: USB mice and keyboards work (use Run >NIL:)
  *   ZZPlug STOP                  stop the running ZZPlug
+ *   ZZPlug RESET                 one root-port reset, then its diagnostic record (ZZPlug stopped)
  *   ZZPlug DIAG [ALL]            the ZZ9000 firmware's USB diagnostic page (read only)
  *
  * While ZZPlug runs it owns the port, so LIST shows what it found instead
@@ -77,13 +78,13 @@ static int show_running(void)
 
 int main(void)
 {
-    LONG args[7] = { 0, 0, 0, 0, 0, 0, 0 };
+    LONG args[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
     struct RDArgs *rda;
     int n, verbose, quiet, start, stopit;
     const char * volatile keepver = ver;
 
     (void)keepver;
-    rda = ReadArgs((STRPTR)"LIST/S,VERBOSE/S,START/S,STOP/S,QUIET/S,DIAG/S,ALL/S", args, NULL);
+    rda = ReadArgs((STRPTR)"LIST/S,VERBOSE/S,START/S,STOP/S,QUIET/S,DIAG/S,ALL/S,RESET/S", args, NULL);
     if (!rda) { PrintFault(IoErr(), (STRPTR)"ZZPlug"); return RETURN_FAIL; }
     verbose = args[1] != 0;
     start = args[2] != 0;
@@ -100,6 +101,14 @@ int main(void)
     if (!mb_open(&MB)) {
         printf("ZZPlug: %s\n", MB.why);
         return RETURN_WARN;
+    }
+    if (args[7]) {                              /* one port reset, for the firmware's diagnostic record */
+        int speed = 0, r;
+        mb_transport(&MB, &T);
+        r = T.root_reset(T.ctx, &speed);
+        printf("RESET_PORT: %s, speed %d\n", zzp_status_name(r), speed);
+        mb_close(&MB);
+        return zzp_diag_print(0);
     }
     if (start) {
         n = zzp_daemon(&MB, quiet);
