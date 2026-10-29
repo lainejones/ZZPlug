@@ -112,6 +112,113 @@ static int route_ok(struct sim *s, struct sim_dev *d, struct zzp_xfer *x)
     return 1;
 }
 
+/* ---- the flash drive's disk and SCSI --------------------------------------- */
+
+static void le32(uint8_t *p, uint32_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24); }
+static uint32_t rle32(const uint8_t *p) { return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24); }
+
+void sim_disk(struct sim_dev *d, uint32_t blocks, int with_mbr, uint8_t fat_type)
+{
+    static uint8_t store[2][4096 * 512];
+    static int used;
+    uint8_t *b;
+    d->disk = store[used++ & 1];
+    d->blocks = blocks;
+    memset(d->disk, 0, (size_t)blocks * 512);
+    d->attention = 1;
+    d->mbr_type = fat_type;
+    b = d->disk;
+    if (with_mbr) {                         /* one partition from block 63 to the end */
+        uint8_t *e = b + 446;
+        e[4] = fat_type;
+        le32(e + 8, 63);
+        le32(e + 12, blocks - 63);
+        b[510] = 0x55; b[511] = 0xaa;
+        b = d->disk + 63 * 512;
+    }
+    b[0] = 0xeb; b[1] = 0x3c; b[2] = 0x90;  /* a FAT boot sector */
+    memcpy(b + 3, "MSDOS5.0", 8);
+    b[11] = 0x00; b[12] = 0x02; b[13] = 8;
+    b[510] = 0x55; b[511] = 0xaa;
+}
+
+static int scsi_cmd(struct sim_dev *d)
+{
+    const uint8_t *cdb = d->cbw + 15;
+    uint32_t lba = ((uint32_t)cdb[2] << 24) | ((uint32_t)cdb[3] << 16) | ((uint32_t)cdb[4] << 8) | cdb[5];
+    uint32_t n = (uint32_t)(cdb[7] << 8) | cdb[8];
+    d->status = 0;
+    if (d->attention && cdb[0] != 0x03 && cdb[0] != 0x12) {
+        d->attention = 0;
+        d->sense[0] = 6; d->sense[1] = 0x28; d->sense[2] = 0;   /* unit attention: medium may have changed */
+        d->status = 1;
+        return 0;
+    }
+    if ((cdb[0] == 0x28 || cdb[0] == 0x2a) && (lba >= d->blocks || n > d->blocks - lba)) {
+        d->sense[0] = 5; d->sense[1] = 0x21; d->sense[2] = 0;   /* LBA out of range */
+        d->status = 1;
+        return 0;
+    }
+    return 1;
+}
+
+static int sim_bulk(struct sim *s, struct sim_dev *d, struct zzp_xfer *x)
+{
+    uint8_t *cdb = d->cbw + 15;
+    if (x->dir_in ? d->halted_in : d->halted_out) return XS_STALL;
+    if (!x->dir_in && x->ep == 2 && d->phase == 0) {          /* the command block wrapper */
+        if (x->len != 31 || rle32(x->data) != 0x43425355UL) { s->bad_setup++; d->halted_in = d->halted_out = 1; return XS_STALL; }
+        memcpy(d->cbw, x->data, 31);
+        d->data_len = rle32(d->cbw + 8);
+        d->done = 0;
+        x->actual = 31;
+        if (!scsi_cmd(d) || d->data_len == 0) { d->phase = 2; return XS_OK; }
+        d->phase = 1;
+        return XS_OK;
+    }
+    if (d->phase == 1) {                                       /* data */
+        uint32_t lba = ((uint32_t)cdb[2] << 24) | ((uint32_t)cdb[3] << 16) | ((uint32_t)cdb[4] << 8) | cdb[5];
+        uint8_t tmp[36];
+        if (d->stall_data_once) { d->stall_data_once = 0; d->status = 1; d->sense[0] = 3; d->phase = 2;
+                                  if (x->dir_in) d->halted_in = 1; else d->halted_out = 1; return XS_STALL; }
+        if (x->len > d->data_len - d->done) { s->bad_setup++; return XS_BADPARAM; }
+        switch (cdb[0]) {
+        case 0x12:
+            memset(tmp, 0, 36); tmp[0] = 0; tmp[1] = 0x80; memcpy(tmp + 8, "Kingston", 8); memcpy(tmp + 16, "DataTraveler 3.0", 16);
+            memcpy(x->data, tmp, x->len < 36 ? x->len : 36); break;
+        case 0x03:
+            memset(x->data, 0, x->len); x->data[0] = 0x70; x->data[2] = d->sense[0]; x->data[7] = 10;
+            x->data[12] = d->sense[1]; x->data[13] = d->sense[2]; break;
+        case 0x25: {
+            uint32_t last = d->blocks - 1;
+            x->data[0] = (uint8_t)(last >> 24); x->data[1] = (uint8_t)(last >> 16); x->data[2] = (uint8_t)(last >> 8); x->data[3] = (uint8_t)last;
+            x->data[4] = 0; x->data[5] = 0; x->data[6] = 2; x->data[7] = 0; break;
+        }
+        case 0x1a: memset(x->data, 0, x->len); break;
+        case 0x28: memcpy(x->data, d->disk + (size_t)lba * 512 + d->done, x->len); break;
+        case 0x2a: memcpy(d->disk + (size_t)lba * 512 + d->done, x->data, x->len); break;
+        default: break;
+        }
+        x->actual = x->len;
+        d->done += x->len;
+        if (d->done >= d->data_len) d->phase = 2;
+        return XS_OK;
+    }
+    if (x->dir_in && d->phase == 2) {                          /* the status wrapper */
+        uint8_t *c = x->data;
+        if (x->len < 13) { s->bad_setup++; return XS_BADPARAM; }
+        le32(c, 0x53425355UL);
+        memcpy(c + 4, d->cbw + 4, 4);
+        le32(c + 8, d->data_len - d->done);
+        c[12] = d->status;
+        x->actual = 13;
+        d->phase = 0;
+        return XS_OK;
+    }
+    s->bad_setup++;                                            /* out of step */
+    return XS_STALL;
+}
+
 static int sim_xfer(void *ctx, struct zzp_xfer *x)
 {
     struct sim *s = (struct sim *)ctx;
@@ -127,7 +234,16 @@ static int sim_xfer(void *ctx, struct zzp_xfer *x)
     if (i < 0) return XS_TIMEOUT;
     d = &s->dev[i];
     if (!route_ok(s, d, x)) return XS_ERROR;
+    if (x->type == XT_BULK && d->kind == SIM_FLASH && d->disk) return sim_bulk(s, d, x);
     if (x->type != XT_CONTROL || x->ep != 0) return XS_STALL;
+    if (d->kind == SIM_FLASH && (rt & 0x60) == RT_CLASS) {
+        if (req == 0xfe) return XS_STALL;                      /* GET_MAX_LUN: like most sticks */
+        if (req == 0xff) { d->resets++; d->phase = 0; return XS_OK; }
+    }
+    if (d->kind == SIM_FLASH && (rt & 0x1f) == 0x02 && req == REQ_CLEAR_FEATURE) {
+        if ((index & 0x80)) d->halted_in = 0; else d->halted_out = 0;
+        return XS_OK;
+    }
     if (len != x->len || ((rt & 0x80) != 0) != (x->dir_in != 0)) { s->bad_setup++; return XS_BADPARAM; }
     if (x->maxpkt > 8 && d->addr == 0 && d->kind == SIM_MOUSE) { s->bad_maxpkt++; return XS_ERROR; }
     kind = d->kind;

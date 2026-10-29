@@ -7,6 +7,7 @@
 #include "../src/core.h"
 #include "../src/usbdefs.h"
 #include "../src/hid.h"
+#include "../src/msd.h"
 
 static int fails;
 #define CHECK(c, m) do { if (c) printf("  ok   %s\n", m); else { printf("  FAIL %s\n", m); fails++; } } while (0)
@@ -94,6 +95,51 @@ int main(void)
     zzp_bus_init(&B, &T);
     n = zzp_scan(&B);
     CHECK(n == 2 && B.dev[0].ok && !B.dev[1].ok && strstr(B.dev[1].note, "refused an address"), "the hub works, the mouse is listed with the reason");
+
+    printf("[a USB stick: bulk-only storage]\n");
+    {
+        struct zzp_msd ms;
+        static uint8_t buf[40 * 512], back[40 * 512];
+        struct zzp_part parts[MAXPART];
+        int fi, r, k;
+        sim_init(&S, SIM_HUB);
+        f = sim_plug(&S, 1, SIM_FLASH);
+        sim_disk(&S.dev[f], 4096, 1, 0x0c);
+        sim_transport(&S, &T);
+        zzp_bus_init(&B, &T);
+        n = zzp_scan(&B);
+        fi = find_kind("DataTraveler 3.0");
+        CHECK(n == 2 && fi >= 0 && zzp_msd_find(&B.dev[fi]) == 0, "the stick is found with a bulk-only SCSI interface");
+        r = zzp_msd_init(&ms, &B, fi);
+        CHECK(r == MSD_OK && ms.blocks == 4096 && ms.blksize == 512 && ms.removable && !strcmp(ms.vendor, "Kingston"),
+              "ready after the unit attention: 4096 blocks of 512, removable, Kingston");
+        CHECK(ms.ep_in == 0x81 && ms.ep_out == 0x02 && ms.mps_in == 512 && ms.max_lun == 0, "endpoints, and one LUN when GET_MAX_LUN stalls");
+        r = zzp_msd_read(&ms, 0, 1, buf);
+        CHECK(r == MSD_OK && buf[510] == 0x55 && buf[511] == 0xaa, "block 0 read: an MBR signature");
+        k = zzp_parse_parts(buf, ms.blocks, parts);
+        CHECK(k == 1 && parts[0].start == 63 && parts[0].count == 4096 - 63 && parts[0].type == 0x0c && !strcmp(zzp_fat_name(0x0c), "FAT32"),
+              "one FAT32 partition from block 63 to the end");
+        for (k = 0; k < (int)sizeof(buf); k++) buf[k] = (uint8_t)(k * 7 + 3);
+        r = zzp_msd_write(&ms, 1000, 40, buf);
+        CHECK(r == MSD_OK, "40 blocks written (two commands: 32 + 8)");
+        memset(back, 0, sizeof(back));
+        r = zzp_msd_read(&ms, 1000, 40, back);
+        CHECK(r == MSD_OK && !memcmp(buf, back, sizeof(buf)), "read back identical");
+        r = zzp_msd_read(&ms, 4090, 10, back);
+        CHECK(r == MSD_RANGE, "a read past the end is refused before it is sent");
+        S.dev[f].stall_data_once = 1;
+        r = zzp_msd_read(&ms, 0, 1, back);
+        CHECK(r == MSD_FAILED && ms.sense_key == 3, "a stalled data stage: halt cleared, status read, sense says medium error");
+        r = zzp_msd_read(&ms, 0, 1, back);
+        CHECK(r == MSD_OK && back[510] == 0x55, "and the next read works");
+        CHECK(S.bad_setup == 0 && S.bad_split == 0 && S.bad_speed == 0, "every wrapper and transfer was well formed");
+        /* a stick formatted without a partition table */
+        sim_disk(&S.dev[f], 2048, 0, 0);
+        zzp_msd_init(&ms, &B, fi);
+        zzp_msd_read(&ms, 0, 1, buf);
+        k = zzp_parse_parts(buf, ms.blocks, parts);
+        CHECK(k == 1 && parts[0].start == 0 && parts[0].count == 2048 && parts[0].type == 0, "no partition table: the whole stick is one FAT volume");
+    }
 
     printf("[mouse reports]\n");
     {

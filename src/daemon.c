@@ -21,7 +21,11 @@
 #include "hid.h"
 #include "report.h"
 #include "usbdefs.h"
+#include "msd.h"
+#include "device.h"
 #include "daemon.h"
+#include <dos/dostags.h>
+#include <dos/dosextens.h>
 
 #define DRV_MOUSE 1
 #define DRV_KBD   2
@@ -58,6 +62,156 @@ static struct MsgPort *inport;
 static struct IOStdReq *inreq;
 static int input_open;
 static int rescan_wanted;
+
+/* ---- USB sticks: one device unit each, kept across rescans by serial ---- */
+struct stick {
+    int used;                   /* this unit belongs to a stick (seen at least once) */
+    int dev;                    /* bus index now, -1 = not plugged in */
+    uint16_t vid, pid;
+    char serial[ZZP_STRLEN];
+    struct zzp_msd msd;
+    int status;                 /* MSD_* of the last init */
+    int nparts;
+    struct zzp_part parts[MAXPART];
+    char name[MAXPART][12];     /* DOS device name mounted for each part, "" = none */
+    uint32_t mstart[MAXPART], mcount[MAXPART];   /* what that name was mounted with */
+};
+static struct stick ST[ZZD_UNITS];
+static int device_ok;
+static char mountmsg[160];
+
+static ULONG dostype_for(uint8_t type)
+{
+    char v[16];
+    /* ENV:ZZPlug.dostype overrides (e.g. 0x4D534800) */
+    if (GetVar((STRPTR)"ZZPlug.dostype", (STRPTR)v, sizeof(v), 0) > 0) {
+        ULONG d = 0; const char *p = v;
+        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+        while (*p) { char c = *p++; d = d * 16 + (ULONG)(c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10); }
+        return d;
+    }
+    (void)type;
+    return 0x4D534400UL;                        /* "MSD\0": OS 3.2's CrossDOS reads FAT12/16/32 with it (verified
+                                                 * on a FAT32 stick); "FAT2" and "MSH\0" give "Not a DOS disk" */
+}
+
+static int dos_name_exists(const char *name)
+{
+    struct DosList *dl = LockDosList(LDF_DEVICES | LDF_READ);
+    int found = FindDosEntry(dl, (STRPTR)name, LDF_DEVICES) != NULL;
+    UnLockDosList(LDF_DEVICES | LDF_READ);
+    return found;
+}
+
+/* mount (or remount, when the name was used for different geometry) in the background:
+ * Mount waits for the filesystem, and the filesystem waits for this task */
+static void mount_part(int unit, int j)
+{
+    struct stick *s = &ST[unit];
+    struct zzp_part *p = &s->parts[j];
+    char name[12], file[48], cmd[200];
+    FILE *f;
+    BPTR in, out;
+    int exists;
+
+    if (j == 0) sprintf(name, "USB%d", unit); else sprintf(name, "USB%d_%d", unit, j);
+    if (s->name[j][0] && s->mstart[j] == p->start && s->mcount[j] == p->count && dos_name_exists(name))
+        return;                                 /* the same layout as mounted: a disk change is enough */
+    sprintf(file, "T:ZZPlug-%s", name);
+    f = fopen(file, "w");
+    if (!f) return;
+    fprintf(f, "/* written by ZZPlug: %s on zzusbdisk.device unit %d, %s, blocks %lu-%lu */\n",
+            name, unit, zzp_fat_name(p->type), (unsigned long)p->start, (unsigned long)(p->start + p->count - 1));
+    fprintf(f, "%s:\n", name);                  /* MountList format: the name, the keywords, then # */
+    fprintf(f, "Device = %s\nUnit = %d\nFlags = 0\nFileSystem = L:CrossDOSFileSystem\nDosType = 0x%08lX\n",
+            ZZD_NAME, unit, (unsigned long)dostype_for(p->type));
+    fprintf(f, "Surfaces = 1\nBlocksPerTrack = 1\nSectorSize = %lu\nReserved = 0\nLowCyl = %lu\nHighCyl = %lu\n",
+            (unsigned long)s->msd.blksize, (unsigned long)p->start, (unsigned long)(p->start + p->count - 1));
+    fprintf(f, "Buffers = 50\nBufMemType = 1\nMaxTransfer = 0x10000\nMask = 0x7FFFFFFE\nStackSize = 4096\nPriority = 5\nGlobVec = -1\nActivate = 1\n#\n");
+    fclose(f);
+    exists = dos_name_exists(name);
+    if (exists)
+        sprintf(cmd, "Assign %s: DISMOUNT\nMount %s: FROM %s", name, name, file);
+    else
+        sprintf(cmd, "Mount %s: FROM %s", name, file);
+    in = Open((STRPTR)"NIL:", MODE_OLDFILE);
+    out = Open((STRPTR)"NIL:", MODE_NEWFILE);
+    if (SystemTags((STRPTR)cmd, SYS_Input, in, SYS_Output, out, SYS_Asynch, TRUE, NP_StackSize, 8192, TAG_DONE) == -1) {
+        Close(in); Close(out);
+        sprintf(mountmsg, "could not run Mount for %s:", name);
+        return;
+    }
+    strcpy(s->name[j], name);
+    s->mstart[j] = p->start;
+    s->mcount[j] = p->count;
+    sprintf(mountmsg, "%s: mounted (%s, %lu MB)", name, zzp_fat_name(p->type),
+            (unsigned long)((uint64_t)p->count * s->msd.blksize / 1048576UL));
+}
+
+/* after a scan: match the storage devices on the bus to units, start them, mount what is new */
+static void sticks_after_scan(void)
+{
+    static uint8_t sector[4096];
+    int i, k, j;
+    for (k = 0; k < ZZD_UNITS; k++) ST[k].dev = -1;
+    for (i = 0; i < B.ndev; i++) {
+        struct zzp_dev *u = &B.dev[i];
+        struct stick *s = NULL;
+        if (!u->used || !u->ok || zzp_msd_find(u) < 0) continue;
+        for (k = 0; k < ZZD_UNITS && !s; k++)   /* the same stick as before keeps its unit */
+            if (ST[k].used && ST[k].dev < 0 && ST[k].vid == u->vid && ST[k].pid == u->pid && !strcmp(ST[k].serial, u->serial))
+                s = &ST[k];
+        for (k = 0; k < ZZD_UNITS && !s; k++)   /* else a unit nobody has mounted, else any free one */
+            if (!ST[k].used) s = &ST[k];
+        for (k = 0; k < ZZD_UNITS && !s; k++)
+            if (ST[k].dev < 0) s = &ST[k];
+        if (!s) continue;                       /* more sticks than units */
+        k = (int)(s - ST);
+        if (!s->used || s->vid != u->vid || s->pid != u->pid || strcmp(s->serial, u->serial))
+            s->nparts = 0;                      /* a different stick on this unit */
+        s->used = 1;
+        s->dev = i;
+        s->vid = u->vid; s->pid = u->pid;
+        strcpy(s->serial, u->serial);
+        s->status = zzp_msd_init(&s->msd, &B, i);
+        if (s->status != MSD_OK) continue;
+        if (zzp_msd_read(&s->msd, 0, 1, sector) == MSD_OK)
+            s->nparts = zzp_parse_parts(sector, s->msd.blocks, s->parts);
+    }
+    for (k = 0; k < ZZD_UNITS; k++) {
+        struct stick *s = &ST[k];
+        if (!s->used) continue;
+        if (s->dev < 0 || s->status != MSD_OK) { zzd_set_media(k, NULL); continue; }
+        zzd_set_media(k, &s->msd);
+        for (j = 0; j < s->nparts; j++)
+            mount_part(k, j);
+        if (!s->nparts) sprintf(mountmsg, "the stick on unit %d has no FAT partition ZZPlug can mount", k);
+    }
+}
+
+static void write_sticks(FILE *f)
+{
+    int k, j;
+    for (k = 0; k < ZZD_UNITS; k++) {
+        struct stick *s = &ST[k];
+        if (!s->used) continue;
+        fprintf(f, "  %s unit %d: ", ZZD_NAME, k);
+        if (s->dev < 0) { fprintf(f, "unplugged\n"); continue; }
+        if (s->status != MSD_OK) {
+            fprintf(f, "not ready (%s, sense %d/%02X/%02X)\n", s->status == MSD_NOMEDIA ? "no medium" : zzp_status_name(s->status),
+                    s->msd.sense_key, s->msd.asc, s->msd.ascq);
+            continue;
+        }
+        fprintf(f, "%s %s, %lu MB%s; %lu reads, %lu writes, %lu errors\n", s->msd.vendor, s->msd.product,
+                (unsigned long)((uint64_t)s->msd.blocks * s->msd.blksize / 1048576UL), s->msd.write_protected ? ", write-protected" : "",
+                (unsigned long)zzd_units[k].reads, (unsigned long)zzd_units[k].writes, (unsigned long)zzd_units[k].errors);
+        for (j = 0; j < s->nparts; j++)
+            fprintf(f, "    partition %d: %s, %lu MB from block %lu%s%s%s\n", j + 1, zzp_fat_name(s->parts[j].type),
+                    (unsigned long)((uint64_t)s->parts[j].count * s->msd.blksize / 1048576UL), (unsigned long)s->parts[j].start,
+                    s->name[j][0] ? " -> " : "", s->name[j], s->name[j][0] ? ":" : "");
+    }
+    if (mountmsg[0]) fprintf(f, "  %s\n", mountmsg);
+}
 
 static void inject(const struct zzp_event *ev, int n)
 {
@@ -172,6 +326,7 @@ static void write_env(void)
                 B.dev[D[i].dev].speed == SPEED_HIGH ? "microframes" : "ms",
                 (unsigned long)D[i].reports, (unsigned long)D[i].naks, (unsigned long)D[i].errors, zzp_status_name(D[i].last));
     fprintf(f, "  USB interrupts: %lu\n", (unsigned long)mb_irq_count(MB));
+    write_sticks(f);
     if (B.kicked) fprintf(f, "  (the port looked empty at start; a port reset found the device)\n");
     fclose(f);
 }
@@ -194,6 +349,7 @@ static void scan(void)
             else if (f->cls == CLASS_HID && f->subclass == 1 && f->proto == 1) add_drv(i, DRV_KBD, f);
         }
     }
+    if (device_ok) sticks_after_scan();
     write_env();
 }
 
@@ -275,6 +431,8 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     usbmask = 1UL << usbsig;
     tmask = 1UL << tport->mp_SigBit;
     mb_irq_install(mb, FindTask(NULL), usbmask);
+    device_ok = zzd_open();
+    if (!device_ok) printf("ZZPlug: could not create %s - USB sticks will not mount\n", ZZD_NAME);
 
     B.kick_offline = 1;
     scan();
@@ -290,8 +448,14 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     treq->tr_time.tv_micro = TICK_MS * 1000UL;
     SendIO((struct IORequest *)treq);
     for (;;) {
-        sig = Wait(usbmask | tmask | SIGBREAKF_CTRL_C);
-        if (sig & SIGBREAKF_CTRL_C) break;
+        sig = Wait(usbmask | tmask | zzd_sigmask() | SIGBREAKF_CTRL_C);
+        if (sig & SIGBREAKF_CTRL_C) {
+            if (!zzd_in_use()) break;
+            /* a mounted stick holds the device open: stopping would pull it from under the filesystem */
+            strcpy(mountmsg, "ZZPlug STOP refused: a USB stick is mounted, and ZZPlug serves it");
+            write_env();
+        }
+        zzd_service();                          /* reads and writes for the sticks */
         poll_endpoints();                       /* on the interrupt, and on every tick as a safety net */
         if (GetMsg(tport)) {
             for (i = 0; i < ND; i++)
@@ -325,6 +489,7 @@ out:
     release_all();
     stop_all();                                 /* no completions left: the card drops the interrupt */
     mb_irq_remove(mb);
+    if (device_ok) zzd_close();
     if (timer_open) CloseDevice((struct IORequest *)treq);
     if (treq) DeleteIORequest((struct IORequest *)treq);
     if (tport) DeleteMsgPort(tport);

@@ -14,6 +14,7 @@
 #include <string.h>
 #include <exec/types.h>
 #include <exec/ports.h>
+#include <exec/execbase.h>
 #include <dos/dos.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -22,7 +23,7 @@
 #include "report.h"
 #include "daemon.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.3 (29.10.2026)";
+static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.4 (29.10.2026)";
 
 static struct zzp_mailbox MB;
 static struct zzp_transport T;
@@ -42,6 +43,18 @@ static int stop(void)
 {
     struct MsgPort *p;
     int i;
+    {
+        struct Library *d;
+        int inuse;
+        Forbid();
+        d = (struct Library *)FindName(&SysBase->DeviceList, (STRPTR)"zzusbdisk.device");
+        inuse = d && d->lib_OpenCnt > 0;
+        Permit();
+        if (inuse) {
+            printf("ZZPlug keeps running: a USB stick is mounted and ZZPlug serves it\n");
+            return RETURN_WARN;
+        }
+    }
     Forbid();
     p = FindPort((STRPTR)ZZP_PORTNAME);
     if (p) Signal(p->mp_SigTask, SIGBREAKF_CTRL_C);

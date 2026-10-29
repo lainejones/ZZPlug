@@ -56,6 +56,7 @@ struct zzp_transport {
     /* optional (NULL in the host simulation) */
     int  (*periodic)(void *ctx, int op, struct zzp_xfer *x, uint16_t interval, uint16_t generation);
     int  (*requery)(void *ctx);                                /* renegotiate after the firmware moved its epoch */
+    void (*clear_toggle)(void *ctx, uint8_t addr, uint8_t ep, uint8_t in);   /* after CLEAR_FEATURE(HALT) */
 };
 
 #endif

@@ -32,6 +32,7 @@
 #define CMD_RESET_PORT   0x05
 #define CMD_CHECK_PORT   0x0c
 #define CMD_QUERY_CAPS   0x0d
+#define CMD_RETIRE_EP    0x0e
 #define CMD_PERIODIC_ARM  0x11
 #define CMD_PERIODIC_REAP 0x12
 #define CMD_PERIODIC_STOP 0x13
@@ -167,6 +168,17 @@ static int mb_periodic(void *ctx, int op, struct zzp_xfer *x, uint16_t interval,
                 op == PO_REAP ? x->data : NULL, op == PO_REAP ? x->len : 0, &actual, 0);
     x->actual = actual;
     return r;
+}
+
+/* the device's toggle went back to DATA0 after CLEAR_FEATURE(HALT): so must the firmware's */
+static void mb_clear_toggle(void *ctx, uint8_t addr, uint8_t ep, uint8_t in)
+{
+    struct zzp_mailbox *m = (struct zzp_mailbox *)ctx;
+    clear_header(m);
+    w32(m->ap + 4, addr);
+    w16(m->ap + 8, ep);
+    w16(m->ap + 10, in ? 0x80 : 0);
+    request(m, CMD_RETIRE_EP, NULL, 100, NULL, 0, NULL, 0, NULL, 0);
 }
 
 static int mb_requery(void *ctx)
@@ -356,4 +368,5 @@ void mb_transport(struct zzp_mailbox *m, struct zzp_transport *t)
     t->delay_ms = mb_delay;
     t->periodic = mb_periodic;
     t->requery = mb_requery;
+    t->clear_toggle = mb_clear_toggle;
 }
