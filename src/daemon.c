@@ -353,6 +353,10 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_PROTOCOL, 0, f->number, NULL, 0, NULL);
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_IDLE, 0, f->number, NULL, 0, NULL);
     }
+    if (kind == DRV_KBD) {                      /* the lights from the start: num lock on, caps as it is */
+        d->leds = zzp_kbd_leds(&d->k);
+        zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_REPORT, 0x0200, f->number, &d->leds, 1, NULL);
+    }
     if (arm(d) == XS_OK) {
         ND++;
         if (kind == DRV_PAD) { joy_set(d->slot, 1, 0); npads++; }

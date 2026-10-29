@@ -27,7 +27,7 @@ static const uint8_t usage_map[0x68] = {
     /* 4f right left down up */ 0x4e, 0x4f, 0x4d, 0x4c,
     /* 53 numlock kp/ kp* kp- kp+ kpenter */ 0xff, 0x5c, 0x5d, 0x4a, 0x5e, 0x43,
     /* 59 kp1-9 kp0 kp. */ 0x1d, 0x1e, 0x1f, 0x2d, 0x2e, 0x2f, 0x3d, 0x3e, 0x3f, 0x0f, 0x3c,
-    /* 64 non-US \ (left of Z), application (Help) */ 0x30, 0x5f,
+    /* 64 non-US \ (left of Z), application/menu (right Amiga: keyboards without a right GUI key) */ 0x30, 0x67,
     /* 66 power, 67 kp= */ 0xff, 0xff,
 };
 
@@ -161,6 +161,7 @@ int zzp_kbd_report(struct zzp_kbd *k, const uint8_t *r, int len, struct zzp_even
         if (u < 4 || held(keys, u)) continue;
         raw = zzp_hid_to_rawkey(u);
         if (raw == 0xff || raw == 0x62) continue;  /* caps lock acts on press only */
+        if (raw == 0x67 && !(mods & 0x80)) k->sh->keyq &= (uint16_t)~ZQ_RAMIGA;   /* the menu key as right Amiga */
         key_event(k, ev, &n, raw, 0);
         if (raw == k->repeat_key) { k->repeat_key = 0xff; k->repeating = 0; }
     }
@@ -171,9 +172,16 @@ int zzp_kbd_report(struct zzp_kbd *k, const uint8_t *r, int len, struct zzp_even
         raw = zzp_hid_to_rawkey(u);
         if (raw == 0xff) continue;
         if (raw == 0x62) {                         /* caps lock: an Amiga lock key */
+            if (k->caps_quiet) continue;            /* a second press straight after: some keyboards repeat it */
+            k->caps_quiet = CAPS_QUIET_MS;
             k->caps = !k->caps;
             if (k->caps) k->sh->keyq |= ZQ_CAPSLOCK; else k->sh->keyq &= (uint16_t)~ZQ_CAPSLOCK;
             key_event(k, ev, &n, 0x62, k->caps);
+            continue;
+        }
+        if (raw == 0x67) {                         /* the menu key as right Amiga: a qualifier, no repeat */
+            k->sh->keyq |= ZQ_RAMIGA;
+            key_event(k, ev, &n, raw, 1);
             continue;
         }
         key_event(k, ev, &n, raw, 1);
@@ -186,6 +194,7 @@ int zzp_kbd_report(struct zzp_kbd *k, const uint8_t *r, int len, struct zzp_even
 int zzp_kbd_tick(struct zzp_kbd *k, int ms, struct zzp_event *ev)
 {
     int n = 0;
+    k->caps_quiet = k->caps_quiet > ms ? (uint16_t)(k->caps_quiet - ms) : 0;
     if (k->repeat_key == 0xff) return 0;
     k->repeat_ms = (uint16_t)(k->repeat_ms + ms);
     while (n < ZZP_MAXEVENTS && k->repeat_ms >= (k->repeating ? REPEAT_PERIOD_MS : REPEAT_DELAY_MS)) {
@@ -201,7 +210,7 @@ int zzp_kbd_tick(struct zzp_kbd *k, int ms, struct zzp_event *ev)
 
 uint8_t zzp_kbd_leds(const struct zzp_kbd *k)
 {
-    return (uint8_t)(k->caps ? 0x02 : 0x00);
+    return (uint8_t)(0x01 | (k->caps ? 0x02 : 0x00));
 }
 
 int zzp_kbd_release(struct zzp_kbd *k, struct zzp_event *ev)

@@ -66,11 +66,13 @@ struct zzp_kbd {
     uint8_t repeat_key;         /* raw key held for repeat, 0xff = none */
     uint16_t repeat_ms;         /* time it has been held / since the last repeat */
     uint8_t repeating;
+    uint16_t caps_quiet;        /* ms left in which another Caps Lock press is a bounce */
     struct zzp_hid_shared *sh;
 };
 
 #define REPEAT_DELAY_MS  500
 #define REPEAT_PERIOD_MS 40
+#define CAPS_QUIET_MS    250
 
 void zzp_mouse_init(struct zzp_mouse *m, struct zzp_hid_shared *sh);
 void zzp_kbd_init(struct zzp_kbd *k, struct zzp_hid_shared *sh);
@@ -79,7 +81,8 @@ int  zzp_mouse_report(struct zzp_mouse *m, const uint8_t *r, int len, struct zzp
 int  zzp_kbd_report(struct zzp_kbd *k, const uint8_t *r, int len, struct zzp_event *ev);
 /* time passes: key repeat events */
 int  zzp_kbd_tick(struct zzp_kbd *k, int ms, struct zzp_event *ev);
-/* the LED byte the keyboard should show (bit 1 = caps lock) */
+/* the LED byte the keyboard should show: bit 0 num lock (always on - the Amiga keypad always
+ * gives numbers), bit 1 caps lock */
 uint8_t zzp_kbd_leds(const struct zzp_kbd *k);
 /* release everything held (the device went away): events out */
 int  zzp_kbd_release(struct zzp_kbd *k, struct zzp_event *ev);

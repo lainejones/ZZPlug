@@ -192,12 +192,25 @@ int main(void)
               "shift and a in one report: shift first, a carries the shift qualifier");
         n = zzp_kbd_report(&kb, none, 8, ev);
         n = zzp_kbd_report(&kb, caps, 8, ev);
-        CHECK(n == 1 && ev[0].code == 0x62 && (ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 2, "caps lock press: lock on, LED on");
+        CHECK(n == 1 && ev[0].code == 0x62 && (ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 3, "caps lock press: lock on, LED on (num lock LED always on)");
         n = zzp_kbd_report(&kb, none, 8, ev);
         CHECK(n == 0, "caps lock release: nothing (it is a lock)");
         n = zzp_kbd_report(&kb, caps, 8, ev);
-        CHECK(n == 1 && ev[0].code == (0x62 | ZC_UP) && !(ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 0, "pressed again: lock off");
+        CHECK(n == 0 && zzp_kbd_leds(&kb) == 3, "a second caps press within 250 ms is a bounce: still on");
         zzp_kbd_report(&kb, none, 8, ev);
+        zzp_kbd_tick(&kb, 300, ev);
+        n = zzp_kbd_report(&kb, caps, 8, ev);
+        CHECK(n == 1 && ev[0].code == (0x62 | ZC_UP) && !(ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 1, "pressed again later: lock off");
+        zzp_kbd_report(&kb, none, 8, ev);
+        {
+            uint8_t menu[8] = { 0, 0, 0x65, 0, 0, 0, 0, 0 }, menua[8] = { 0, 0, 0x65, 0x04, 0, 0, 0, 0 };
+            n = zzp_kbd_report(&kb, menu, 8, ev);
+            CHECK(n == 1 && ev[0].code == 0x67 && (ev[0].qual & ZQ_RAMIGA), "the menu key is right Amiga");
+            n = zzp_kbd_report(&kb, menua, 8, ev);
+            CHECK(n == 1 && ev[0].code == 0x20 && (ev[0].qual & ZQ_RAMIGA), "menu + a: a carries right Amiga (menu shortcut)");
+            n = zzp_kbd_report(&kb, none, 8, ev);
+            CHECK(n == 2 && !(ev[1].qual & ZQ_RAMIGA) && zzp_kbd_tick(&kb, 1000, ev) == 0, "released: qualifier gone, no repeat");
+        }
         n = zzp_kbd_report(&kb, kp1, 8, ev);
         CHECK(n == 1 && ev[0].code == 0x1d && (ev[0].qual & ZQ_NUMPAD), "keypad 1 = 0x1d with the numeric pad qualifier");
         n = zzp_kbd_report(&kb, roll, 8, ev);
