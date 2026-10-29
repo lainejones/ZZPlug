@@ -6,6 +6,7 @@
  *   ZZPlug [LIST] [VERBOSE]      what is plugged into the ZZ9000's USB port
  *   ZZPlug START [QUIET]         run: USB mice and keyboards work (use Run >NIL:)
  *   ZZPlug STOP                  stop the running ZZPlug
+ *   ZZPlug DIAG [ALL]            the ZZ9000 firmware's USB diagnostic page (read only)
  *
  * While ZZPlug runs it owns the port, so LIST shows what it found instead
  * of scanning again.
@@ -23,6 +24,7 @@
 #include "report.h"
 #include "daemon.h"
 #include "device.h"
+#include "diag.h"
 
 static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.6 (29.10.2026)";
 
@@ -75,19 +77,20 @@ static int show_running(void)
 
 int main(void)
 {
-    LONG args[5] = { 0, 0, 0, 0, 0 };
+    LONG args[7] = { 0, 0, 0, 0, 0, 0, 0 };
     struct RDArgs *rda;
     int n, verbose, quiet, start, stopit;
     const char * volatile keepver = ver;
 
     (void)keepver;
-    rda = ReadArgs((STRPTR)"LIST/S,VERBOSE/S,START/S,STOP/S,QUIET/S", args, NULL);
+    rda = ReadArgs((STRPTR)"LIST/S,VERBOSE/S,START/S,STOP/S,QUIET/S,DIAG/S,ALL/S", args, NULL);
     if (!rda) { PrintFault(IoErr(), (STRPTR)"ZZPlug"); return RETURN_FAIL; }
     verbose = args[1] != 0;
     start = args[2] != 0;
     stopit = args[3] != 0;
     quiet = args[4] != 0;
     FreeArgs(rda);
+    if (args[5]) return zzp_diag_print(args[6] != 0);
 
     if (stopit) return stop();
     if (running()) {
