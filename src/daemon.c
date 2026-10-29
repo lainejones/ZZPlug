@@ -26,6 +26,8 @@
 #include "hidrep.h"
 #include "joy.h"
 #include "daemon.h"
+#include "zzpmsg.h"
+#include <stdarg.h>
 #include <dos/dostags.h>
 #include <dos/dosextens.h>
 
@@ -54,6 +56,7 @@ struct drv {
     struct zzp_kbd k;
     /* a game pad */
     struct zzp_padmap pm;
+    struct zzp_padmap pmraw;    /* buttons as the pad numbers them (ZZPlugPrefs' Learn) */
     int slot;
     uint32_t state;
     uint8_t lastrep[16];
@@ -133,8 +136,9 @@ static void mount_part(int unit, int j)
     fprintf(f, "/* written by ZZPlug: %s on zzusbdisk.device unit %d, %s, blocks %lu-%lu */\n",
             name, unit, zzp_fat_name(p->type), (unsigned long)p->start, (unsigned long)(p->start + p->count - 1));
     fprintf(f, "%s:\n", name);                  /* MountList format: the name, the keywords, then # */
-    fprintf(f, "Device = %s\nUnit = %d\nFlags = 0\nFileSystem = L:CrossDOSFileSystem\nDosType = 0x%08lX\n",
-            ZZD_NAME, unit, (unsigned long)dostype_for(p->type));
+    fprintf(f, "Device = %s\nUnit = %d\nFlags = 0\nFileSystem = %s\nDosType = 0x%08lX\n",
+            ZZD_NAME, unit, dostype_for(p->type) == 0x46415400UL ? "L:fat95" : "L:CrossDOSFileSystem",
+            (unsigned long)dostype_for(p->type));
     fprintf(f, "Surfaces = 1\nBlocksPerTrack = 1\nSectorSize = %lu\nReserved = 0\nLowCyl = %lu\nHighCyl = %lu\n",
             (unsigned long)s->msd.blksize, (unsigned long)p->start, (unsigned long)(p->start + p->count - 1));
     fprintf(f, "Buffers = 50\nBufMemType = 1\nMaxTransfer = 0x10000\nMask = 0x7FFFFFFE\nStackSize = 4096\nPriority = 5\nGlobVec = -1\nActivate = 1\n#\n");
@@ -322,6 +326,7 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
         if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_INTERFACE, REQ_GET_DESCRIPTOR, 0x2200, f->number,
                         desc, sizeof(desc), &got) != XS_OK || !zzp_padmap_parse(&d->pm, desc, (int)got))
             return;
+        d->pmraw = d->pm;
         {   /* the button layout: ENV:ZZPlug.padbuttons ("3 2 1 4 ..." = HID buttons for red, blue, green,
              * yellow, reverse, forward, ...), else a known pad's, else as the pad numbers them */
             uint8_t order[PAD_MAXBUTTONS];
@@ -452,13 +457,199 @@ static void poll_endpoints(void)
     }
 }
 
+/* ---- ZZPlugPrefs' questions (zzpmsg.h) ---- */
+struct sbuf { char *p; ULONG len, used; };
+
+static void bput(struct sbuf *b, const char *fmt, ...)
+{
+    char tmp[400];
+    ULONG n;
+    va_list ap;
+    va_start(ap, fmt);
+    vsprintf(tmp, fmt, ap);
+    va_end(ap);
+    n = strlen(tmp);
+    if (b->used + n + 1 > b->len) n = b->len > b->used + 1 ? b->len - b->used - 1 : 0;
+    memcpy(b->p + b->used, tmp, n);
+    b->used += n;
+    b->p[b->used] = 0;
+}
+
+static void kind_of(const struct zzp_dev *u, char *out)
+{
+    int i;
+    out[0] = 0;
+    if (u->cls && u->cls != CLASS_VENDOR) { strcpy(out, zzp_class_name(u->cls, u->subclass, u->proto)); return; }
+    for (i = 0; i < u->nif; i++) {
+        const char *n = zzp_class_name(u->ifs[i].cls, u->ifs[i].subclass, u->ifs[i].proto);
+        if (strstr(out, n)) continue;
+        if (out[0]) strcat(out, ", ");
+        strcat(out, n);
+    }
+    if (!out[0]) strcpy(out, "unknown kind");
+}
+
+/* in a few words: what ZZPlug does with device i */
+static void dev_status(int i, char *s)
+{
+    const struct zzp_dev *u = &B.dev[i];
+    char kind[80];
+    int k, j;
+    s[0] = 0;
+    if (!u->ok) { sprintf(s, "problem: %s", u->note[0] ? u->note : "it could not be read"); return; }
+    for (k = 0; k < ND; k++) {
+        const struct drv *d = &D[k];
+        if (d->dev != i) continue;
+        if (s[0]) strcat(s, ", ");
+        if (d->kind == DRV_HUB) sprintf(s + strlen(s), "hub, %d ports", u->hub_ports);
+        else if (d->kind == DRV_MOUSE) strcat(s, "mouse, working");
+        else if (d->kind == DRV_KBD) strcat(s, "keyboard, working");
+        else if (d->kind == DRV_PAD) sprintf(s + strlen(s), "game pad, joystick port %d", joy_port_of(d->slot) + 1);
+    }
+    for (k = 0; k < ZZD_UNITS; k++) {
+        const struct stick *t = &ST[k];
+        if (!t->used || t->dev != i) continue;
+        if (s[0]) strcat(s, ", ");
+        if (t->status != MSD_OK) { strcat(s, t->status == MSD_NOMEDIA ? "storage, no medium" : "storage, not ready"); continue; }
+        if (!t->nparts) { strcat(s, "storage, no FAT partition"); continue; }
+        strcat(s, "drive");
+        for (j = 0; j < t->nparts; j++)
+            if (t->name[j][0]) sprintf(s + strlen(s), " %s:", t->name[j]);
+    }
+    if (!s[0] && u->is_hub) sprintf(s, "hub, %d ports", u->hub_ports);
+    if (!s[0]) { kind_of(u, kind); sprintf(s, "%s - ZZPlug has no driver for it yet", kind); }
+}
+
+static void list_dev(struct sbuf *b, int i)
+{
+    const struct zzp_dev *u = &B.dev[i];
+    char st[200];
+    int k;
+    dev_status(i, st);
+    bput(b, "%d\t%d\t%s\t%s\n", i, u->depth, u->product[0] ? u->product : (u->vid ? "(no name)" : "a device"), st);
+    for (k = 0; k < B.ndev; k++)
+        if (B.dev[k].used && B.dev[k].parent == i) list_dev(b, k);
+}
+
+static void detail_dev(struct sbuf *b, int i)
+{
+    const struct zzp_dev *u;
+    char kind[80];
+    int k, j;
+    static const char *const dname[] = { "", "mouse", "keyboard", "hub", "game pad" };
+    if (i < 0 || i >= B.ndev || !B.dev[i].used) { bput(b, "That device is gone.\n"); return; }
+    u = &B.dev[i];
+    bput(b, "%s\n", u->product[0] ? u->product : "(no name)");
+    if (u->manufacturer[0]) bput(b, "Made by %s\n", u->manufacturer);
+    if (u->parent < 0) bput(b, "Plugged into the ZZ9000\n");
+    else bput(b, "Port %d of %s\n", u->port, B.dev[(int)u->parent].product[0] ? B.dev[(int)u->parent].product : "a hub");
+    if (!u->ok) bput(b, "Problem: %s\n", u->note[0] ? u->note : "it could not be read");
+    if (!u->vid) return;
+    kind_of(u, kind);
+    bput(b, "Kind: %s\n", kind);
+    bput(b, "ID %04X:%04X, USB %x.%02x\n", u->vid, u->pid, u->bcd_usb >> 8, u->bcd_usb & 0xff);
+    bput(b, "Runs at %s\n", zzp_speed_name(u->speed));
+    bput(b, "%s, up to %d mA\n", u->self_powered ? "Self-powered" : "Bus-powered", u->max_power_ma);
+    if (u->tt_hub) bput(b, "Address %d, split via hub %d port %d\n", u->addr, u->tt_hub, u->tt_port);
+    else bput(b, "Address %d\n", u->addr);
+    if (u->serial[0]) bput(b, "Serial %s\n", u->serial);
+    for (k = 0; k < ND; k++) {
+        const struct drv *d = &D[k];
+        if (d->dev != i) continue;
+        bput(b, "Driver: %s, %lu reports, %lu errors\n", dname[d->kind], (unsigned long)d->reports, (unsigned long)d->errors);
+        if (d->kind == DRV_PAD)
+            bput(b, "Joystick port %d, %d buttons%s\n", joy_port_of(d->slot) + 1, d->pm.nbuttons, d->pm.hat.present ? ", hat" : "");
+    }
+    for (k = 0; k < ZZD_UNITS; k++) {
+        const struct stick *t = &ST[k];
+        if (!t->used || t->dev != i) continue;
+        if (t->status != MSD_OK) { bput(b, "Storage: %s\n", t->status == MSD_NOMEDIA ? "no medium" : "not ready"); continue; }
+        bput(b, "%s %s\n", t->msd.vendor, t->msd.product);
+        bput(b, "%lu MB%s\n", (unsigned long)((uint64_t)t->msd.blocks * t->msd.blksize / 1048576UL),
+             t->msd.write_protected ? ", write-protected" : "");
+        bput(b, "%lu reads, %lu writes, %lu errors\n", (unsigned long)zzd_units[k].reads,
+             (unsigned long)zzd_units[k].writes, (unsigned long)zzd_units[k].errors);
+        for (j = 0; j < t->nparts; j++)
+            bput(b, "Partition %d: %s, %lu MB%s%s%s\n", j + 1, zzp_fat_name(t->parts[j].type),
+                 (unsigned long)((uint64_t)t->parts[j].count * t->msd.blksize / 1048576UL),
+                 t->name[j][0] ? ", as " : "", t->name[j], t->name[j][0] ? ":" : "");
+    }
+}
+
+static int stop_refused(char *why)
+{
+    char nm[32];
+    if (zzd_mounted(nm, sizeof(nm))) {          /* stopping would pull the device from under a filesystem */
+        sprintf(why, "%s: is mounted on a USB stick, and ZZPlug serves it", nm);
+        return 1;
+    }
+    if (!joy_can_close()) {                     /* someone patched ReadJoyPort after us and calls our code */
+        strcpy(why, "another program patched ReadJoyPort after ZZPlug");
+        return 1;
+    }
+    return 0;
+}
+
+/* answer one message; 1 = ZZPlug should stop */
+static int answer(struct zzp_msg *m)
+{
+    struct sbuf b;
+    int k, quit = 0;
+    char why[120];
+    b.p = m->buf; b.len = m->buflen; b.used = 0;
+    if (b.p && b.len) b.p[0] = 0;
+    else b.p = NULL;
+    m->rc = 0;
+    switch (m->cmd) {
+    case ZZP_MSG_LIST:
+        if (!b.p) break;
+        for (k = 0; k < B.ndev; k++)
+            if (B.dev[k].used && B.dev[k].parent < 0) list_dev(&b, k);
+        if (B.note[0]) bput(&b, "-1\t0\t%s\t\n", B.note);
+        break;
+    case ZZP_MSG_DETAIL:
+        if (b.p) detail_dev(&b, (int)m->arg);
+        break;
+    case ZZP_MSG_PAD:
+        m->rc = -1;
+        for (k = 0; k < ND; k++)
+            if (D[k].kind == DRV_PAD && D[k].slot == 0) {
+                uint16_t raw = 0;
+                if (D[k].lastlen) zzp_pad_state(&D[k].pmraw, D[k].lastrep, D[k].lastlen, &raw);
+                m->out[0] = raw;
+                m->out[1] = D[k].state;
+                m->out[2] = (ULONG)D[k].pmraw.nbuttons;
+                m->rc = 0;
+                break;
+            }
+        break;
+    case ZZP_MSG_RESCAN:
+        rescan_wanted = 1;
+        break;
+    case ZZP_MSG_STOP:
+        if (stop_refused(why)) {
+            m->rc = 1;
+            if (b.p) bput(&b, "%s", why);
+            sprintf(mountmsg, "ZZPlug STOP refused: %s", why);
+        } else
+            quit = 1;
+        break;
+    default:
+        m->rc = -1;
+    }
+    ReplyMsg(&m->m);
+    return quit;
+}
+
 int zzp_daemon(struct zzp_mailbox *mb, int quiet)
 {
     struct MsgPort *pub, *tport = NULL;
     struct timerequest *treq = NULL;
     struct zzp_event ev[ZZP_MAXEVENTS];
     int speed, root_on, r, since_root = 0, i, timer_open = 0, usbsig, env_ticks = 0;
-    ULONG sig, usbmask, tmask;
+    ULONG sig, usbmask, tmask, pubmask;
+    struct zzp_msg *zm;
+    int quit = 0;
 
     Forbid();
     pub = FindPort((STRPTR)ZZP_PORTNAME);
@@ -468,6 +659,7 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     pub->mp_Node.ln_Name = (char *)ZZP_PORTNAME;
     pub->mp_Node.ln_Pri = 0;
     AddPort(pub);
+    pubmask = 1UL << pub->mp_SigBit;
 
     MB = mb;
     mb_transport(mb, &T);
@@ -511,17 +703,16 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     treq->tr_time.tv_micro = TICK_MS * 1000UL;
     SendIO((struct IORequest *)treq);
     for (;;) {
-        sig = Wait(usbmask | tmask | zzd_sigmask() | SIGBREAKF_CTRL_C);
+        sig = Wait(usbmask | tmask | pubmask | zzd_sigmask() | SIGBREAKF_CTRL_C);
         if (sig & SIGBREAKF_CTRL_C) {
-            char nm[32];
-            if (zzd_mounted(nm, sizeof(nm)))    /* stopping would pull the device from under a filesystem */
-                sprintf(mountmsg, "ZZPlug STOP refused: %s: is mounted on a USB stick, and ZZPlug serves it", nm);
-            else if (!joy_can_close())          /* someone patched ReadJoyPort after us and calls our code */
-                strcpy(mountmsg, "ZZPlug STOP refused: another program patched ReadJoyPort after ZZPlug");
-            else
-                break;
+            char why[120];
+            if (!stop_refused(why)) break;
+            sprintf(mountmsg, "ZZPlug STOP refused: %s", why);
             write_env();
         }
+        while ((zm = (struct zzp_msg *)GetMsg(pub)))
+            quit |= answer(zm);
+        if (quit) break;
         zzd_service();                          /* reads and writes for the sticks */
         poll_endpoints();                       /* on the interrupt, and on every tick as a safety net */
         if (GetMsg(tport)) {
@@ -566,7 +757,10 @@ out:
     if (input_open) CloseDevice((struct IORequest *)inreq);
     if (inreq) DeleteIORequest((struct IORequest *)inreq);
     if (inport) DeleteMsgPort(inport);
+    Forbid();                                   /* nobody finds the port from here on */
     RemPort(pub);
+    Permit();
+    while ((zm = (struct zzp_msg *)GetMsg(pub))) { zm->rc = -1; ReplyMsg(&zm->m); }
     DeleteMsgPort(pub);
     if (!quiet) printf("ZZPlug stopped\n");
     return RETURN_OK;
