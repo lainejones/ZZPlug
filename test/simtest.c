@@ -8,6 +8,7 @@
 #include "../src/usbdefs.h"
 #include "../src/hid.h"
 #include "../src/msd.h"
+#include "../src/hidrep.h"
 
 static int fails;
 #define CHECK(c, m) do { if (c) printf("  ok   %s\n", m); else { printf("  FAIL %s\n", m); fails++; } } while (0)
@@ -212,6 +213,58 @@ int main(void)
         CHECK(n == 1 && (ev[0].qual & ZQ_LSHIFT) && (ev[0].qual & ZQ_LBUTTON), "shift-click: the click carries the keyboard's shift");
         CHECK(zzp_hid_to_rawkey(0x1d) == 0x31 && zzp_hid_to_rawkey(0x29) == 0x45 && zzp_hid_to_rawkey(0x52) == 0x4c &&
               zzp_hid_to_rawkey(0x64) == 0x30, "z, Esc, cursor up and the international key map to their Amiga codes");
+    }
+
+    printf("[game pad report descriptors]\n");
+    {
+        /* a common cheap pad: 5 axis bytes (X and Y last two), a hat, 12 buttons, padding */
+        static const uint8_t d1[] = {
+            0x05,0x01, 0x09,0x05, 0xa1,0x01, 0xa1,0x02,
+            0x75,0x08, 0x95,0x05, 0x15,0x00, 0x26,0xff,0x00, 0x09,0x32, 0x09,0x35, 0x09,0x33, 0x09,0x30, 0x09,0x31, 0x81,0x02,
+            0x75,0x04, 0x95,0x01, 0x25,0x07, 0x46,0x3b,0x01, 0x65,0x14, 0x09,0x39, 0x81,0x42,
+            0x65,0x00, 0x75,0x01, 0x95,0x0c, 0x25,0x01, 0x45,0x01, 0x05,0x09, 0x19,0x01, 0x29,0x0c, 0x81,0x02,
+            0x06,0x00,0xff, 0x75,0x01, 0x95,0x08, 0x25,0x01, 0x45,0x01, 0x09,0x01, 0x81,0x02,
+            0xc0, 0xc0 };
+        /* a pad with a report ID and signed axes */
+        static const uint8_t d2[] = {
+            0x05,0x01, 0x09,0x04, 0xa1,0x01, 0x85,0x03,
+            0x05,0x09, 0x19,0x01, 0x29,0x08, 0x15,0x00, 0x25,0x01, 0x75,0x01, 0x95,0x08, 0x81,0x02,
+            0x05,0x01, 0x09,0x30, 0x09,0x31, 0x15,0x81, 0x25,0x7f, 0x75,0x08, 0x95,0x02, 0x81,0x02, 0xc0 };
+        struct zzp_padmap pm;
+        uint16_t bt;
+        uint8_t centre[8] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x0f, 0x00, 0x00 };
+        uint8_t leftup_a[8] = { 0x80, 0x80, 0x80, 0x00, 0x00, 0x1f, 0x00, 0x00 };   /* X 0, Y 0, hat centre, button 1 */
+        uint8_t hat_right[8] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x02, 0x00, 0x00 };  /* hat 2 = east */
+        uint8_t start[8] = { 0x80, 0x80, 0x80, 0x80, 0x80, 0x0f, 0x20, 0x00 };      /* button 10: bit 44 + 9 = byte 6 bit 5 */
+        uint8_t r2[4] = { 3, 0x02, 0x7f, 0x81 };                                     /* id 3, button 2, X +127, Y -127 */
+        uint8_t other[4] = { 1, 0xff, 0x00, 0x00 };
+        uint32_t s;
+
+        CHECK(zzp_padmap_parse(&pm, d1, sizeof(d1)) && pm.x.bit == 24 && pm.y.bit == 32 && pm.hat.bit == 40 &&
+              pm.hat.size == 4 && pm.nbuttons == 12 && pm.button[0].bit == 44 && !pm.uses_ids,
+              "a pad descriptor: X at byte 3, Y at byte 4, a 4-bit hat, 12 buttons after it");
+        s = zzp_pad_state(&pm, centre, 8, &bt);
+        CHECK(s == 0 && bt == 0, "centred, no buttons: nothing");
+        s = zzp_pad_state(&pm, leftup_a, 8, &bt);
+        CHECK(s == (PAD_LEFT | PAD_UP | PAD_RED) && bt == 1, "X and Y at 0 with button 1: left, up, red (fire)");
+        s = zzp_pad_state(&pm, hat_right, 8, &bt);
+        CHECK(s == PAD_RIGHT, "the hat pointing east: right");
+        s = zzp_pad_state(&pm, start, 8, &bt);
+        CHECK(s == PAD_PLAY && bt == 0x200, "button 10 (start): play");
+        CHECK(zzp_padmap_parse(&pm, d2, sizeof(d2)) && pm.uses_ids && pm.x.report_id == 3 && pm.x.lmin == -127 && pm.x.bit == 8,
+              "a joystick with report ID 3 and signed axes");
+        s = zzp_pad_state(&pm, r2, 4, &bt);
+        CHECK(s == (PAD_RIGHT | PAD_UP | PAD_BLUE), "X +127, Y -127, button 2: right, up, blue");
+        CHECK(zzp_pad_state(&pm, other, 4, &bt) == 0xffffffffUL, "another report ID is not the pad's");
+        {
+            uint8_t order[16];
+            int n2;
+            zzp_padmap_parse(&pm, d1, sizeof(d1));
+            n2 = zzp_padmap_order_for(0x081f, 0xe401, order);
+            CHECK(n2 == 4 && zzp_padmap_reorder(&pm, order, n2) == 4, "the 081F:E401 pad has a known layout");
+            s = zzp_pad_state(&pm, leftup_a, 8, &bt);       /* HID button 1 = the top face button */
+            CHECK((s & (PAD_GREEN | PAD_RED)) == PAD_GREEN, "after reordering, its top button is green and not fire");
+        }
     }
 
     printf("%s: %d failures\n", fails ? "FAIL" : "PASS", fails);

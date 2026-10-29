@@ -23,6 +23,8 @@
 #include "usbdefs.h"
 #include "msd.h"
 #include "device.h"
+#include "hidrep.h"
+#include "joy.h"
 #include "daemon.h"
 #include <dos/dostags.h>
 #include <dos/dosextens.h>
@@ -30,6 +32,7 @@
 #define DRV_MOUSE 1
 #define DRV_KBD   2
 #define DRV_HUB   3
+#define DRV_PAD   4
 #define MAXDRV    12
 #define TICK_MS   20
 #define ROOT_CHECK_MS 500
@@ -49,7 +52,14 @@ struct drv {
     int last;                   /* the last status other than NAK */
     struct zzp_mouse m;
     struct zzp_kbd k;
+    /* a game pad */
+    struct zzp_padmap pm;
+    int slot;
+    uint32_t state;
+    uint8_t lastrep[16];
+    int lastlen;
 };
+static int npads;
 
 static struct zzp_mailbox *MB;
 static struct zzp_transport T;
@@ -304,12 +314,44 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
     d->interval = interval_for(u, f->ep[j].interval);
     if (kind == DRV_MOUSE) zzp_mouse_init(&d->m, &shared);
     if (kind == DRV_KBD) zzp_kbd_init(&d->k, &shared);
-    if (kind != DRV_HUB) {
+    if (kind == DRV_PAD) {
+        /* the report descriptor says where the stick and the buttons are */
+        static uint8_t desc[512];
+        uint32_t got = 0;
+        if (npads >= JOY_SLOTS) return;
+        if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_INTERFACE, REQ_GET_DESCRIPTOR, 0x2200, f->number,
+                        desc, sizeof(desc), &got) != XS_OK || !zzp_padmap_parse(&d->pm, desc, (int)got))
+            return;
+        {   /* the button layout: ENV:ZZPlug.padbuttons ("3 2 1 4 ..." = HID buttons for red, blue, green,
+             * yellow, reverse, forward, ...), else a known pad's, else as the pad numbers them */
+            uint8_t order[PAD_MAXBUTTONS];
+            char v[64];
+            int n = 0;
+            if (GetVar((STRPTR)"ZZPlug.padbuttons", (STRPTR)v, sizeof(v), 0) > 0) {
+                char *p = v;
+                while (*p && n < PAD_MAXBUTTONS) {
+                    while (*p == ' ' || *p == ',') p++;
+                    if (*p < '0' || *p > '9') break;
+                    order[n] = 0;
+                    while (*p >= '0' && *p <= '9') order[n] = (uint8_t)(order[n] * 10 + (*p++ - '0'));
+                    n++;
+                }
+            } else
+                n = zzp_padmap_order_for(u->vid, u->pid, order);
+            if (n) zzp_padmap_reorder(&d->pm, order, n);
+        }
+        d->slot = npads;
+        zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_IDLE, 0, f->number, NULL, 0, NULL);
+    }
+    if (kind == DRV_MOUSE || kind == DRV_KBD) {
         /* boot protocol, and reports only on change */
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_PROTOCOL, 0, f->number, NULL, 0, NULL);
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_IDLE, 0, f->number, NULL, 0, NULL);
     }
-    if (arm(d) == XS_OK) ND++;
+    if (arm(d) == XS_OK) {
+        ND++;
+        if (kind == DRV_PAD) { joy_set(d->slot, 1, 0); npads++; }
+    }
 }
 
 static void write_env(void)
@@ -317,14 +359,25 @@ static void write_env(void)
     FILE *f = fopen(ZZP_ENVFILE, "w");
     if (!f) return;
     int i;
-    static const char *const kind[] = { "", "mouse", "keyboard", "hub" };
+    static const char *const kind[] = { "", "mouse", "keyboard", "hub", "game pad" };
     fprintf(f, "ZZPlug is running (ZZ9000 USB, Zorro %d, protocol v2)\n", MB->zorro);
     zzp_print_tree(f, &B, 1);
-    for (i = 0; i < ND; i++)
+    for (i = 0; i < ND; i++) {
+        struct drv *d = &D[i];
+        int k;
         fprintf(f, "  driver %d: %s on address %d, endpoint %d, every %d %s: %lu reports, %lu empty, %lu errors (last %s)\n",
-                i, kind[D[i].kind], B.dev[D[i].dev].addr, D[i].ep & 15, D[i].interval,
-                B.dev[D[i].dev].speed == SPEED_HIGH ? "microframes" : "ms",
-                (unsigned long)D[i].reports, (unsigned long)D[i].naks, (unsigned long)D[i].errors, zzp_status_name(D[i].last));
+                i, kind[d->kind], B.dev[d->dev].addr, d->ep & 15, d->interval,
+                B.dev[d->dev].speed == SPEED_HIGH ? "microframes" : "ms",
+                (unsigned long)d->reports, (unsigned long)d->naks, (unsigned long)d->errors, zzp_status_name(d->last));
+        if (d->kind == DRV_PAD) {
+            fprintf(f, "    joystick port %d (lowlevel port %d): %d buttons, X %s, Y %s, hat %s; state %08lX; last report",
+                    joy_port_of(d->slot) + 1, joy_port_of(d->slot), d->pm.nbuttons,
+                    d->pm.x.present ? "yes" : "no", d->pm.y.present ? "yes" : "no", d->pm.hat.present ? "yes" : "no",
+                    (unsigned long)d->state);
+            for (k = 0; k < d->lastlen; k++) fprintf(f, " %02X", d->lastrep[k]);
+            fputc('\n', f);
+        }
+    }
     fprintf(f, "  USB interrupts: %lu\n", (unsigned long)mb_irq_count(MB));
     write_sticks(f);
     if (B.kicked) fprintf(f, "  (the port looked empty at start; a port reset found the device)\n");
@@ -337,6 +390,8 @@ static void scan(void)
     release_all();
     stop_all();
     ND = 0;
+    npads = 0;
+    for (k = 0; k < JOY_SLOTS; k++) joy_set(k, 0, 0);
     generation++;
     zzp_scan(&B);
     for (i = 0; i < B.ndev; i++) {
@@ -347,6 +402,7 @@ static void scan(void)
             if (f->cls == CLASS_HUB) add_drv(i, DRV_HUB, f);
             else if (f->cls == CLASS_HID && f->subclass == 1 && f->proto == 2) add_drv(i, DRV_MOUSE, f);
             else if (f->cls == CLASS_HID && f->subclass == 1 && f->proto == 1) add_drv(i, DRV_KBD, f);
+            else if (f->cls == CLASS_HID) add_drv(i, DRV_PAD, f);     /* joined only if the descriptor is a pad's */
         }
     }
     if (device_ok) sticks_after_scan();
@@ -383,6 +439,12 @@ static void poll_endpoints(void)
             if (d->kind == DRV_MOUSE) inject(ev, zzp_mouse_report(&d->m, buf, (int)x.actual, ev));
             else if (d->kind == DRV_KBD) { inject(ev, zzp_kbd_report(&d->k, buf, (int)x.actual, ev)); set_leds(d); }
             else if (d->kind == DRV_HUB && x.actual) rescan_wanted = 1;     /* a port changed */
+            else if (d->kind == DRV_PAD) {
+                uint32_t s = zzp_pad_state(&d->pm, buf, (int)x.actual, NULL);
+                d->lastlen = x.actual < sizeof(d->lastrep) ? (int)x.actual : (int)sizeof(d->lastrep);
+                memcpy(d->lastrep, buf, (size_t)d->lastlen);
+                if (s != 0xffffffffUL) { d->state = s; joy_set(d->slot, 1, s); }
+            }
         } else if (++d->fails > 20) {
             rescan_wanted = 1;                  /* the device keeps failing: it is probably gone */
         }
@@ -433,6 +495,7 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     mb_irq_install(mb, FindTask(NULL), usbmask);
     device_ok = zzd_open();
     if (!device_ok) printf("ZZPlug: could not create %s - USB sticks will not mount\n", ZZD_NAME);
+    if (!joy_open()) printf("ZZPlug: no lowlevel.library - game pads will not work\n");
 
     B.kick_offline = 1;
     scan();
@@ -450,9 +513,13 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
     for (;;) {
         sig = Wait(usbmask | tmask | zzd_sigmask() | SIGBREAKF_CTRL_C);
         if (sig & SIGBREAKF_CTRL_C) {
-            if (!zzd_in_use()) break;
-            /* a mounted stick holds the device open: stopping would pull it from under the filesystem */
-            strcpy(mountmsg, "ZZPlug STOP refused: a USB stick is mounted, and ZZPlug serves it");
+            char nm[32];
+            if (zzd_mounted(nm, sizeof(nm)))    /* stopping would pull the device from under a filesystem */
+                sprintf(mountmsg, "ZZPlug STOP refused: %s: is mounted on a USB stick, and ZZPlug serves it", nm);
+            else if (!joy_can_close())          /* someone patched ReadJoyPort after us and calls our code */
+                strcpy(mountmsg, "ZZPlug STOP refused: another program patched ReadJoyPort after ZZPlug");
+            else
+                break;
             write_env();
         }
         zzd_service();                          /* reads and writes for the sticks */
@@ -489,6 +556,7 @@ out:
     release_all();
     stop_all();                                 /* no completions left: the card drops the interrupt */
     mb_irq_remove(mb);
+    joy_close();
     if (device_ok) zzd_close();
     if (timer_open) CloseDevice((struct IORequest *)treq);
     if (treq) DeleteIORequest((struct IORequest *)treq);

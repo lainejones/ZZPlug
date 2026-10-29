@@ -22,8 +22,9 @@
 #include "mailbox.h"
 #include "report.h"
 #include "daemon.h"
+#include "device.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.4 (29.10.2026)";
+static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.5 (29.10.2026)";
 
 static struct zzp_mailbox MB;
 static struct zzp_transport T;
@@ -44,14 +45,9 @@ static int stop(void)
     struct MsgPort *p;
     int i;
     {
-        struct Library *d;
-        int inuse;
-        Forbid();
-        d = (struct Library *)FindName(&SysBase->DeviceList, (STRPTR)"zzusbdisk.device");
-        inuse = d && d->lib_OpenCnt > 0;
-        Permit();
-        if (inuse) {
-            printf("ZZPlug keeps running: a USB stick is mounted and ZZPlug serves it\n");
+        char nm[32];
+        if (zzd_mounted(nm, sizeof(nm))) {
+            printf("ZZPlug keeps running: %s: is mounted on a USB stick and ZZPlug serves it\n", nm);
             return RETURN_WARN;
         }
     }

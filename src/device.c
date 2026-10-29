@@ -15,7 +15,10 @@
 #include <exec/interrupts.h>
 #include <devices/trackdisk.h>
 #include <devices/newstyle.h>
+#include <dos/dosextens.h>
+#include <dos/filehandler.h>
 #include <proto/exec.h>
+#include <proto/dos.h>
 #include "device.h"
 
 struct zzd_unit zzd_units[ZZD_UNITS];
@@ -199,6 +202,33 @@ void zzd_close(void)
         dev = NULL;
     }
     if (port) { DeleteMsgPort(port); port = NULL; }
+}
+
+/* walk the DOS device list for an entry whose startup message names our device */
+int zzd_mounted(char *name, int max)
+{
+    struct DosList *dl;
+    int found = 0;
+    dl = LockDosList(LDF_DEVICES | LDF_READ);
+    while (!found && (dl = NextDosEntry(dl, LDF_DEVICES))) {
+        BPTR sb = (BPTR)dl->dol_misc.dol_handler.dol_Startup;
+        struct FileSysStartupMsg *fssm;
+        UBYTE *dn;
+        if ((ULONG)sb < 1024) continue;         /* a small number, not a startup message */
+        fssm = (struct FileSysStartupMsg *)BADDR(sb);
+        if (!TypeOfMem(fssm) || !fssm->fssm_Device) continue;
+        dn = (UBYTE *)BADDR(fssm->fssm_Device);
+        if (!TypeOfMem(dn)) continue;
+        if (dn[0] == sizeof(ZZD_NAME) - 1 && !memcmp(dn + 1, ZZD_NAME, dn[0])) {
+            UBYTE *nm = (UBYTE *)BADDR(dl->dol_Name);
+            int n = nm[0] < max - 1 ? nm[0] : max - 1;
+            memcpy(name, nm + 1, n);
+            name[n] = 0;
+            found = 1;
+        }
+    }
+    UnLockDosList(LDF_DEVICES | LDF_READ);
+    return found;
 }
 
 ULONG zzd_sigmask(void)

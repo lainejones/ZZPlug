@@ -29,6 +29,7 @@ extern struct zzd_unit zzd_units[ZZD_UNITS];
 int  zzd_open(void);                    /* create the device and its port: 1 ok */
 void zzd_close(void);                   /* only when nobody has it open */
 int  zzd_in_use(void);                  /* opened by someone (a mounted filesystem) */
+int  zzd_mounted(char *name, int max);  /* a DOS device mounted on zzusbdisk.device: 1 and its name */
 ULONG zzd_sigmask(void);
 void zzd_service(void);                 /* do every queued request */
 void zzd_set_media(int unit, struct zzp_msd *msd);   /* NULL = removed; tells the filesystems */
