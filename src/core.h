@@ -58,6 +58,8 @@ struct zzp_bus {
     int  ndev;
     uint8_t next_addr;
     int  root_status;           /* XS_OK, XS_OFFLINE, ... from the last scan */
+    int  kick_offline;          /* reset the root port once even when it looks empty (cold-boot hubs) */
+    int  kicked;                /* that reset found something */
     char note[ZZP_NOTELEN];     /* a bus-level remark (nothing plugged in, ...) */
     uint32_t xfers, errors;     /* counters */
 };

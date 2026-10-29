@@ -291,6 +291,13 @@ int zzp_scan(struct zzp_bus *b)
     r = b->t->root_check(b->t->ctx, &speed);
     if (r == XS_OK)
         r = b->t->root_reset(b->t->ctx, &speed);
+    else if (r == XS_OFFLINE && b->kick_offline) {
+        /* a hub attached at power-on can be missed until the port is reset */
+        b->kick_offline = 0;
+        r = b->t->root_reset(b->t->ctx, &speed);
+        if (r != XS_OK) r = XS_OFFLINE;
+        else b->kicked = 1;
+    }
     b->root_status = r;
     if (r == XS_NOBOARD) { note(b->note, "no ZZ9000 USB port could be opened"); return 0; }
     if (r == XS_OFFLINE) { note(b->note, "nothing is plugged into the ZZ9000's USB port"); return 0; }

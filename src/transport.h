@@ -42,12 +42,20 @@ struct zzp_xfer {
     uint32_t actual;            /* transferred */
 };
 
+/* persistent interrupt endpoints (the firmware polls them on schedule) */
+#define PO_ARM  1               /* start, or re-arm after a reap */
+#define PO_REAP 2               /* collect a completion: XS_OK with data, XS_NAK = nothing yet */
+#define PO_STOP 3
+
 struct zzp_transport {
     void *ctx;
     int  (*xfer)(void *ctx, struct zzp_xfer *x);               /* XS_* */
     int  (*root_check)(void *ctx, int *speed);                 /* XS_OK (connected, speed set) or XS_OFFLINE */
     int  (*root_reset)(void *ctx, int *speed);                 /* reset; then as root_check */
     void (*delay_ms)(void *ctx, int ms);
+    /* optional (NULL in the host simulation) */
+    int  (*periodic)(void *ctx, int op, struct zzp_xfer *x, uint16_t interval, uint16_t generation);
+    int  (*requery)(void *ctx);                                /* renegotiate after the firmware moved its epoch */
 };
 
 #endif

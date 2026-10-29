@@ -12,6 +12,8 @@
 #include <exec/execbase.h>
 #include <devices/timer.h>
 #include <libraries/configvars.h>
+#include <exec/interrupts.h>
+#include <hardware/intbits.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include <proto/expansion.h>
@@ -30,6 +32,9 @@
 #define CMD_RESET_PORT   0x05
 #define CMD_CHECK_PORT   0x0c
 #define CMD_QUERY_CAPS   0x0d
+#define CMD_PERIODIC_ARM  0x11
+#define CMD_PERIODIC_REAP 0x12
+#define CMD_PERIODIC_STOP 0x13
 #define DOORBELL_V2      0x8000
 
 #define ST_OK      0x00
@@ -123,16 +128,12 @@ static void clear_header(struct zzp_mailbox *m)
         w16(m->ap + i, 0);
 }
 
-static int mb_xfer(void *ctx, struct zzp_xfer *x)
+/* the parts of the header every transfer has */
+static void fill_header(struct zzp_mailbox *m, struct zzp_xfer *x)
 {
-    struct zzp_mailbox *m = (struct zzp_mailbox *)ctx;
     volatile UBYTE *ap = m->ap;
-    UWORD cmd, flags = 0;
-    ULONG actual = 0;
-    int r, i;
-
-    if (x->len > DATA_MAX) return XS_BADPARAM;
-    cmd = x->type == XT_CONTROL ? CMD_CONTROL_XFER : x->type == XT_BULK ? CMD_BULK_XFER : CMD_INT_XFER;
+    UWORD flags = 0;
+    int i;
     clear_header(m);
     w32(ap + 4, x->addr);
     w16(ap + 8, x->ep);
@@ -149,6 +150,42 @@ static int mb_xfer(void *ctx, struct zzp_xfer *x)
         w16(ap + 42, x->tt_port);
     }
     w16(ap + 44, flags);
+}
+
+static int mb_periodic(void *ctx, int op, struct zzp_xfer *x, uint16_t interval, uint16_t generation)
+{
+    struct zzp_mailbox *m = (struct zzp_mailbox *)ctx;
+    UWORD cmd = op == PO_ARM ? CMD_PERIODIC_ARM : op == PO_REAP ? CMD_PERIODIC_REAP : CMD_PERIODIC_STOP;
+    ULONG actual = 0;
+    int r;
+
+    x->type = XT_INTERRUPT;
+    fill_header(m, x);
+    w16(m->ap + 30, interval);
+    w16(m->ap + 46, generation);
+    r = request(m, cmd, NULL, 100, NULL, 0,
+                op == PO_REAP ? x->data : NULL, op == PO_REAP ? x->len : 0, &actual, 0);
+    x->actual = actual;
+    return r;
+}
+
+static int mb_requery(void *ctx)
+{
+    struct zzp_mailbox *m = (struct zzp_mailbox *)ctx;
+    clear_header(m);
+    return request(m, CMD_QUERY_CAPS, NULL, 100, NULL, 0, NULL, 0, NULL, 1);
+}
+
+static int mb_xfer(void *ctx, struct zzp_xfer *x)
+{
+    struct zzp_mailbox *m = (struct zzp_mailbox *)ctx;
+    UWORD cmd;
+    ULONG actual = 0;
+    int r;
+
+    if (x->len > DATA_MAX) return XS_BADPARAM;
+    cmd = x->type == XT_CONTROL ? CMD_CONTROL_XFER : x->type == XT_BULK ? CMD_BULK_XFER : CMD_INT_XFER;
+    fill_header(m, x);
     r = request(m, cmd, NULL, x->timeout_ms,
                 x->dir_in ? NULL : x->data, x->dir_in ? 0 : x->len,
                 x->dir_in ? x->data : NULL, x->dir_in ? x->len : 0, &actual, 0);
@@ -241,6 +278,75 @@ void mb_close(struct zzp_mailbox *m)
     m->timer_open = 0; m->treq = NULL; m->tport = NULL;
 }
 
+/* ---- the USB event interrupt ----------------------------------------------- */
+#define REG_STATUS        0x04
+#define REG_CONFIG_KEY    0xe8
+#define REG_CONFIG_PRESENT 0xea
+#define CFG_KEY_INT2      5
+#define EVENT_PENDING     0x0010
+#define EVENT_ACK         0x0108
+
+struct irqdata {
+    volatile UBYTE *base;
+    struct Task *task;
+    ULONG sigmask;
+    volatile ULONG count;
+};
+
+static struct Interrupt irq;
+static struct irqdata irqd;
+static int irq_installed, irq_int2;
+
+/* runs in the interrupt: acknowledge the card, wake the task. a1 = is_Data */
+static ULONG usb_isr(struct irqdata *d __asm("a1"))
+{
+    volatile UWORD *st = (volatile UWORD *)(d->base + REG_STATUS);
+    if (!(*st & EVENT_PENDING))
+        return 0;                               /* not ours: the next server on the chain */
+    *st = EVENT_ACK;
+    d->count++;
+    Signal(d->task, d->sigmask);
+    return 1;
+}
+
+int mb_irq_install(struct zzp_mailbox *m, struct Task *task, ULONG sigmask)
+{
+    UWORD present;
+    if (irq_installed) return 1;
+    /* which level the card raises: ZZ9000.CFG int2 = on moves it to INT2 */
+    *(volatile UWORD *)(m->base + REG_CONFIG_KEY) = CFG_KEY_INT2;
+    irq_int2 = *(volatile UWORD *)(m->base + REG_CONFIG_KEY) != 0;
+    present = *(volatile UWORD *)(m->base + REG_CONFIG_PRESENT);
+    if (!present) irq_int2 = 0;
+    irqd.base = m->base;
+    irqd.task = task;
+    irqd.sigmask = sigmask;
+    irqd.count = 0;
+    memset(&irq, 0, sizeof(irq));
+    irq.is_Node.ln_Type = NT_INTERRUPT;
+    irq.is_Node.ln_Pri = 0;
+    irq.is_Node.ln_Name = (char *)"ZZPlug USB";
+    irq.is_Data = &irqd;
+    irq.is_Code = (VOID (*)())usb_isr;
+    AddIntServer(irq_int2 ? INTB_PORTS : INTB_EXTER, &irq);
+    irq_installed = 1;
+    return 1;
+}
+
+void mb_irq_remove(struct zzp_mailbox *m)
+{
+    (void)m;
+    if (!irq_installed) return;
+    RemIntServer(irq_int2 ? INTB_PORTS : INTB_EXTER, &irq);
+    irq_installed = 0;
+}
+
+ULONG mb_irq_count(struct zzp_mailbox *m)
+{
+    (void)m;
+    return irqd.count;
+}
+
 void mb_transport(struct zzp_mailbox *m, struct zzp_transport *t)
 {
     t->ctx = m;
@@ -248,4 +354,6 @@ void mb_transport(struct zzp_mailbox *m, struct zzp_transport *t)
     t->root_check = mb_root_check;
     t->root_reset = mb_root_reset;
     t->delay_ms = mb_delay;
+    t->periodic = mb_periodic;
+    t->requery = mb_requery;
 }

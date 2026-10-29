@@ -6,6 +6,7 @@
 #include "sim.h"
 #include "../src/core.h"
 #include "../src/usbdefs.h"
+#include "../src/hid.h"
 
 static int fails;
 #define CHECK(c, m) do { if (c) printf("  ok   %s\n", m); else { printf("  FAIL %s\n", m); fails++; } } while (0)
@@ -93,6 +94,79 @@ int main(void)
     zzp_bus_init(&B, &T);
     n = zzp_scan(&B);
     CHECK(n == 2 && B.dev[0].ok && !B.dev[1].ok && strstr(B.dev[1].note, "refused an address"), "the hub works, the mouse is listed with the reason");
+
+    printf("[mouse reports]\n");
+    {
+        struct zzp_hid_shared sh = { 0, 0 };
+        struct zzp_mouse mo;
+        struct zzp_event ev[ZZP_MAXEVENTS];
+        uint8_t r1[3] = { 0, 5, (uint8_t)-3 }, r2[3] = { 1, 2, 0 }, r3[3] = { 1, 0, 0 }, r4[3] = { 0, 0, 0 };
+        uint8_t r5[4] = { 0, 0, 0, (uint8_t)-1 };
+        zzp_mouse_init(&mo, &sh);
+        n = zzp_mouse_report(&mo, r1, 3, ev);
+        CHECK(n == 1 && ev[0].cls == ZE_RAWMOUSE && ev[0].code == ZC_NOBUTTON && ev[0].dx == 5 && ev[0].dy == -3 &&
+              (ev[0].qual & ZQ_RELMOUSE), "movement: one relative event, signed deltas");
+        n = zzp_mouse_report(&mo, r2, 3, ev);
+        CHECK(n == 1 && ev[0].code == ZC_LBUTTON && ev[0].dx == 2 && (ev[0].qual & ZQ_LBUTTON),
+              "left button down carries the movement and the button qualifier");
+        n = zzp_mouse_report(&mo, r3, 3, ev);
+        CHECK(n == 0, "still held, no movement: nothing");
+        n = zzp_mouse_report(&mo, r4, 3, ev);
+        CHECK(n == 1 && ev[0].code == (ZC_LBUTTON | ZC_UP) && !(ev[0].qual & ZQ_LBUTTON), "left button up");
+        n = zzp_mouse_report(&mo, r5, 4, ev);
+        CHECK(n == 2 && ev[0].cls == ZE_RAWKEY && ev[0].code == ZC_WHEEL_DOWN && ev[1].code == (ZC_WHEEL_DOWN | ZC_UP),
+              "a wheel click down is a NewMouse wheel-down key press and release");
+    }
+
+    printf("[keyboard reports]\n");
+    {
+        struct zzp_hid_shared sh = { 0, 0 };
+        struct zzp_kbd kb;
+        struct zzp_mouse mo;
+        struct zzp_event ev[ZZP_MAXEVENTS];
+        uint8_t a[8] = { 0, 0, 0x04, 0, 0, 0, 0, 0 };          /* a */
+        uint8_t sa[8] = { 0x02, 0, 0x04, 0, 0, 0, 0, 0 };      /* left shift + a */
+        uint8_t none[8] = { 0 };
+        uint8_t caps[8] = { 0, 0, 0x39, 0, 0, 0, 0, 0 };
+        uint8_t kp1[8] = { 0, 0, 0x59, 0, 0, 0, 0, 0 };
+        uint8_t roll[8] = { 0, 0, 1, 1, 1, 1, 1, 1 };
+        uint8_t click[3] = { 1, 0, 0 };
+        zzp_kbd_init(&kb, &sh);
+        zzp_mouse_init(&mo, &sh);
+        n = zzp_kbd_report(&kb, a, 8, ev);
+        CHECK(n == 1 && ev[0].cls == ZE_RAWKEY && ev[0].code == 0x20 && ev[0].qual == 0, "a down = raw key 0x20");
+        n = zzp_kbd_report(&kb, sa, 8, ev);
+        CHECK(n == 1 && ev[0].code == 0x60 && (ev[0].qual & ZQ_LSHIFT), "shift pressed while a is held: shift down, a not repeated");
+        n = zzp_kbd_report(&kb, none, 8, ev);
+        CHECK(n == 2 && ev[0].code == (0x60 | ZC_UP) && ev[1].code == (0x20 | ZC_UP) && !(ev[1].qual & ZQ_LSHIFT),
+              "both released: shift up, then a up unshifted");
+        n = zzp_kbd_report(&kb, sa, 8, ev);
+        CHECK(n == 2 && ev[0].code == 0x60 && ev[1].code == 0x20 && (ev[1].qual & ZQ_LSHIFT),
+              "shift and a in one report: shift first, a carries the shift qualifier");
+        n = zzp_kbd_report(&kb, none, 8, ev);
+        n = zzp_kbd_report(&kb, caps, 8, ev);
+        CHECK(n == 1 && ev[0].code == 0x62 && (ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 2, "caps lock press: lock on, LED on");
+        n = zzp_kbd_report(&kb, none, 8, ev);
+        CHECK(n == 0, "caps lock release: nothing (it is a lock)");
+        n = zzp_kbd_report(&kb, caps, 8, ev);
+        CHECK(n == 1 && ev[0].code == (0x62 | ZC_UP) && !(ev[0].qual & ZQ_CAPSLOCK) && zzp_kbd_leds(&kb) == 0, "pressed again: lock off");
+        zzp_kbd_report(&kb, none, 8, ev);
+        n = zzp_kbd_report(&kb, kp1, 8, ev);
+        CHECK(n == 1 && ev[0].code == 0x1d && (ev[0].qual & ZQ_NUMPAD), "keypad 1 = 0x1d with the numeric pad qualifier");
+        n = zzp_kbd_report(&kb, roll, 8, ev);
+        CHECK(n == 0, "a phantom (rollover) report changes nothing");
+        n = zzp_kbd_tick(&kb, 400, ev);
+        CHECK(n == 0, "no repeat before 500 ms");
+        n = zzp_kbd_tick(&kb, 180, ev);
+        CHECK(n == 3 && ev[0].code == 0x1d && (ev[0].qual & ZQ_REPEAT), "580 ms held: the first repeat and two more at 40 ms");
+        n = zzp_kbd_release(&kb, ev);
+        CHECK(n == 1 && ev[0].code == (0x1d | ZC_UP) && zzp_kbd_tick(&kb, 1000, ev) == 0, "release on unplug, repeat stops");
+        zzp_kbd_report(&kb, sa, 8, ev);
+        n = zzp_mouse_report(&mo, click, 3, ev);
+        CHECK(n == 1 && (ev[0].qual & ZQ_LSHIFT) && (ev[0].qual & ZQ_LBUTTON), "shift-click: the click carries the keyboard's shift");
+        CHECK(zzp_hid_to_rawkey(0x1d) == 0x31 && zzp_hid_to_rawkey(0x29) == 0x45 && zzp_hid_to_rawkey(0x52) == 0x4c &&
+              zzp_hid_to_rawkey(0x64) == 0x30, "z, Esc, cursor up and the international key map to their Amiga codes");
+    }
 
     printf("%s: %d failures\n", fails ? "FAIL" : "PASS", fails);
     return fails ? 1 : 0;

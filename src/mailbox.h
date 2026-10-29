@@ -21,4 +21,12 @@ int  mb_open(struct zzp_mailbox *m);           /* 1 = ready; else m->why says wh
 void mb_close(struct zzp_mailbox *m);
 void mb_transport(struct zzp_mailbox *m, struct zzp_transport *t);
 
+/* The firmware raises an Amiga interrupt (INT6, or INT2 when ZZ9000.CFG asks
+ * for it) while a periodic completion is waiting; it must be acknowledged
+ * or the line stays asserted and the machine locks up. Install before
+ * arming any endpoint, remove after stopping them all. */
+int  mb_irq_install(struct zzp_mailbox *m, struct Task *task, ULONG sigmask);
+void mb_irq_remove(struct zzp_mailbox *m);
+ULONG mb_irq_count(struct zzp_mailbox *m);
+
 #endif
