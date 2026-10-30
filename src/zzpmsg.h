@@ -21,6 +21,14 @@
                              * play, -, -, play, ...), 0 = none; rc = -1 when there is no such pad */
 #define ZZP_MSG_RESCAN 4    /* settings changed: read ENV: again and enumerate everything again */
 #define ZZP_MSG_STOP   5    /* end ZZPlug; rc = 1 and the reason in buf when it has to stay */
+#define ZZP_MSG_DUMP   6    /* ZZPlug DUMP, for devices ZZPlug does not know yet:
+                             * arg 0 = start: buf <- every device's descriptors (device, configuration,
+                             *         HID report descriptors) as text, then reports are recorded -
+                             *         from the drivers, and from HID interfaces nothing drives;
+                             * arg 1 = buf <- the reports recorded since, one line each, only those
+                             *         that changed; out[0] = lines, out[1] = lines lost (full);
+                             *         rc = 1 when the recording ended (devices plugged or unplugged);
+                             * arg 2 = stop recording */
 
 struct zzp_msg {
     struct Message m;

@@ -10,6 +10,8 @@
  *  - the game pads' buttons, in a window of their own: every pad plugged in,
  *    each Amiga button set by pressing the pad's button, kept per kind of pad
  *    (ENV:ZZPlug.padbuttons.VVVV-PPPP); a live readout of the pad
+ *  - Record a device: runs ZZPlug DUMP in a window of its own, for a device
+ *    ZZPlug does not know yet (the file goes with a bug report)
  *  - Save (ENVARC: too) / Use (ENV: only) / Cancel, as Amiga prefs editors do
  *
  * It asks ZZPlug through its public port (zzpmsg.h); nothing here touches
@@ -46,7 +48,7 @@ static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs 0.7 (29.10.20
 #define DOSTYPE_CROSSDOS 0x4D534400UL           /* "MSD\0" */
 #define DOSTYPE_FAT95    0x46415400UL           /* "FAT\0" */
 
-enum { G_STATE = 1, G_START, G_STOP, G_DEVS, G_DETAIL, G_FAT, G_PADSET, G_PADWIN, G_PADNOW, G_MSG,
+enum { G_STATE = 1, G_START, G_STOP, G_DEVS, G_DETAIL, G_FAT, G_PADSET, G_PADWIN, G_PADNOW, G_RECTEXT, G_RECORD, G_MSG,
        G_SAVE, G_USE, G_CANCEL };
 
 #define MAXLINES 40
@@ -822,6 +824,22 @@ static void start_zzplug(void)
     message("Starting ZZPlug...");
 }
 
+/* ZZPlug DUMP in a console window: it says what to do, counts down and saves the file */
+static void record_device(void)
+{
+    BPTR con;
+    if (!zzplug_running()) { message("Start ZZPlug first, then plug the device in."); return; }
+    con = Open((STRPTR)"CON:20/30/620/200/ZZPlug - record a device/CLOSE/WAIT", MODE_NEWFILE);
+    if (!con) { message("Could not open a window for the recording."); return; }
+    if (SystemTags((STRPTR)"C:ZZPlug DUMP", SYS_Input, con, SYS_Output, 0UL, SYS_Asynch, TRUE,
+                   NP_StackSize, 16384, TAG_DONE) == -1) {
+        Close(con);
+        message("Could not start C:ZZPlug DUMP.");
+        return;
+    }
+    message("Recording: follow the steps in the new window.");
+}
+
 static void stop_zzplug(void)
 {
     char why[160];
@@ -908,6 +926,15 @@ static int make_gadgets(int *pw, int *ph)
     ng.ng_LeftEdge = x; ng.ng_TopEdge = y; ng.ng_Width = iw - labw;
     ng.ng_GadgetText = (STRPTR)"Game pad now"; ng.ng_GadgetID = G_PADNOW;
     g = gPadNow = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)padnowtext, GTTX_Border, TRUE, TAG_END);
+    y += row;
+    bw = tlen("Record a device...") + 24;
+    ng.ng_Flags = PLACETEXT_LEFT;
+    ng.ng_LeftEdge = x; ng.ng_TopEdge = y; ng.ng_Width = iw - labw - bw - 8;
+    ng.ng_GadgetText = (STRPTR)"Not working?"; ng.ng_GadgetID = G_RECTEXT;
+    g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)"Record what a device sends, for a bug report", TAG_END);
+    ng.ng_Flags = 0;
+    ng.ng_LeftEdge = bl + iw - bw; ng.ng_Width = bw; ng.ng_GadgetText = (STRPTR)"Record a device..."; ng.ng_GadgetID = G_RECORD;
+    g = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
     y += row;
     ng.ng_LeftEdge = bl; ng.ng_Width = iw; ng.ng_GadgetText = NULL; ng.ng_GadgetID = G_MSG;
     ng.ng_TopEdge = y;
@@ -1024,6 +1051,9 @@ int main(void)
                         else message("L:fat95 is not installed - sticks would not mount with it.");
                     } else
                         message(code ? "" : "New FAT sticks will mount with CrossDOS.");
+                    break;
+                case G_RECORD:
+                    record_device();
                     break;
                 case G_PADWIN:
                     pad_window(tport, treq);

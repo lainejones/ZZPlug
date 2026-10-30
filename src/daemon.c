@@ -35,6 +35,7 @@
 #define DRV_KBD   2
 #define DRV_HUB   3
 #define DRV_PAD   4
+#define DRV_RECORD 5            /* ZZPlug DUMP: an interface nothing drives, read for the record */
 #define MAXDRV    12
 #define TICK_MS   20
 #define ROOT_CHECK_MS 500
@@ -61,6 +62,8 @@ struct drv {
     uint32_t state;
     uint8_t lastrep[16];
     int lastlen;
+    uint8_t recrep[64];         /* ZZPlug DUMP: the last report recorded, to keep only changes */
+    int reclen;
 };
 static int npads;
 
@@ -75,6 +78,7 @@ static struct MsgPort *inport;
 static struct IOStdReq *inreq;
 static int input_open;
 static int rescan_wanted;
+static int rec_on, rec_ended;          /* ZZPlug DUMP is recording; the recording ended */
 
 /* ---- USB sticks: one device unit each, kept across rescans by serial ---- */
 struct stick {
@@ -384,7 +388,7 @@ static void write_env(void)
     FILE *f = fopen(ZZP_ENVFILE, "w");
     if (!f) return;
     int i;
-    static const char *const kind[] = { "", "mouse", "keyboard", "hub", "game pad" };
+    static const char *const kind[] = { "", "mouse", "keyboard", "hub", "game pad", "recording" };
     fprintf(f, "ZZPlug is running (ZZ9000 USB, Zorro %d, protocol v2)\n", MB->zorro);
     zzp_print_tree(f, &B, 1);
     for (i = 0; i < ND; i++) {
@@ -426,6 +430,7 @@ static void write_env(void)
 static void scan(void)
 {
     int i, k;
+    if (rec_on) { rec_on = 0; rec_ended = 1; }  /* the drivers are rebuilt: the recording ends */
     release_all();
     stop_all();
     ND = 0;
@@ -457,6 +462,37 @@ static void set_leds(struct drv *d)
 }
 
 /* collect what each endpoint has: reports become input events */
+/* ---- ZZPlug DUMP: every report as it changes, for devices ZZPlug does not know yet ---- */
+#define REC_MAX 256
+struct rec { ULONG ms; uint8_t drv, len; uint8_t data[64]; };
+static struct rec REC[REC_MAX];
+static int rec_head, rec_tail, rec_nd0;
+static ULONG rec_ms, rec_lost;
+
+static void rec_add(int i, const uint8_t *buf, int len)
+{
+    struct drv *d = &D[i];
+    struct rec *e;
+    if (len > 64) len = 64;
+    if (len == d->reclen) {                     /* only changes, and not an idle stick's jitter */
+        int k, jitter = 1;
+        for (k = 0; k < len && jitter; k++) {
+            int was = d->recrep[k], now = buf[k], diff = now - was;
+            if (diff == 0) continue;
+            /* a centred 8-bit axis wobbling by 1 or 2; buttons change by whole bits, far from 0x80 */
+            if (!(was >= 0x70 && was <= 0x90 && diff >= -2 && diff <= 2)) jitter = 0;
+        }
+        if (jitter) return;
+    }
+    d->reclen = len;
+    memcpy(d->recrep, buf, (size_t)len);
+    if ((rec_head + 1) % REC_MAX == rec_tail) { rec_lost++; return; }
+    e = &REC[rec_head];
+    e->ms = rec_ms; e->drv = (uint8_t)i; e->len = (uint8_t)len;
+    memcpy(e->data, buf, (size_t)len);
+    rec_head = (rec_head + 1) % REC_MAX;
+}
+
 static void poll_endpoints(void)
 {
     uint8_t buf[64];
@@ -475,6 +511,7 @@ static void poll_endpoints(void)
         if (r == XS_OK) {
             d->reports++;
             d->fails = 0;
+            if (rec_on && d->kind != DRV_HUB) rec_add(i, buf, (int)x.actual);
             if (d->kind == DRV_MOUSE) {
                 d->lastlen = x.actual < sizeof(d->lastrep) ? (int)x.actual : (int)sizeof(d->lastrep);
                 memcpy(d->lastrep, buf, (size_t)d->lastlen);
@@ -482,6 +519,7 @@ static void poll_endpoints(void)
             }
             else if (d->kind == DRV_KBD) { inject(ev, zzp_kbd_report(&d->k, buf, (int)x.actual, ev)); set_leds(d); }
             else if (d->kind == DRV_HUB && x.actual) rescan_wanted = 1;     /* a port changed */
+            else if (d->kind == DRV_RECORD) ;                               /* recorded above, nothing else */
             else if (d->kind == DRV_PAD) {
                 uint32_t s = zzp_pad_state(&d->pm, buf, (int)x.actual, NULL);
                 d->lastlen = x.actual < sizeof(d->lastrep) ? (int)x.actual : (int)sizeof(d->lastrep);
@@ -577,7 +615,7 @@ static void detail_dev(struct sbuf *b, int i)
     const struct zzp_dev *u;
     char kind[80];
     int k, j;
-    static const char *const dname[] = { "", "mouse", "keyboard", "hub", "game pad" };
+    static const char *const dname[] = { "", "mouse", "keyboard", "hub", "game pad", "recording" };
     if (i < 0 || i >= B.ndev || !B.dev[i].used) { bput(b, "That device is gone.\n"); return; }
     u = &B.dev[i];
     bput(b, "%s\n", u->product[0] ? u->product : "(no name)");
@@ -631,6 +669,148 @@ static int stop_refused(char *why)
     return 0;
 }
 
+static void bhex(struct sbuf *b, const uint8_t *p, uint32_t n)
+{
+    uint32_t k;
+    for (k = 0; k < n; k++)
+        bput(b, "%s%02X", k % 16 == 0 ? (k ? "\n      " : "      ") : " ", p[k]);
+    bput(b, "\n");
+}
+
+/* every device's descriptors, as text; then record from HID interfaces nothing drives */
+static void dump_start(struct sbuf *b)
+{
+    static uint8_t buf[1024];
+    uint16_t replen[16];
+    uint32_t got;
+    int i, k, j;
+
+    for (i = 0; i < B.ndev; i++) {
+        struct zzp_dev *u = &B.dev[i];
+        char st[160];
+        if (!u->used) continue;
+        dev_status(i, st);
+        bput(b, "== device %d: %s [%04X:%04X]%s%s, %s speed, address %d, ", i,
+             u->product[0] ? u->product : "(no name)", u->vid, u->pid,
+             u->manufacturer[0] ? " by " : "", u->manufacturer,
+             u->speed == SPEED_HIGH ? "high" : u->speed == SPEED_FULL ? "full" : "low", u->addr);
+        if (u->parent < 0) bput(b, "on the ZZ9000's port\n");
+        else bput(b, "port %d of the hub at address %d\n", u->port, B.dev[(int)u->parent].addr);
+        bput(b, "   ZZPlug: %s\n", st[0] ? st : "-");
+        if (u->note[0]) bput(b, "   note: %s\n", u->note);
+        if (!u->ok || !u->addr) continue;
+        got = 0;
+        if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_DEVICE, REQ_GET_DESCRIPTOR, DT_DEVICE << 8, 0, buf, 18, &got) == XS_OK) {
+            bput(b, "   device descriptor (%lu bytes):\n", (unsigned long)got);
+            bhex(b, buf, got);
+        }
+        got = 0;
+        if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_DEVICE, REQ_GET_DESCRIPTOR, DT_CONFIG << 8, 0, buf, 9, &got) == XS_OK && got >= 9) {
+            uint16_t total = (uint16_t)(buf[2] | (buf[3] << 8));
+            if (total > sizeof(buf)) total = sizeof(buf);
+            got = 0;
+            if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_DEVICE, REQ_GET_DESCRIPTOR, DT_CONFIG << 8, 0, buf, total, &got) == XS_OK) {
+                bput(b, "   configuration descriptor (%lu bytes):\n", (unsigned long)got);
+                bhex(b, buf, got);
+            }
+        }
+        {   /* each HID interface's report descriptor length, from its HID descriptor (0x21) */
+            uint8_t *c = buf;
+            uint32_t clen = got, p = 0;
+            int ifnum = -1;
+            memset(replen, 0, sizeof(replen));
+            while (p + 2 <= clen && c[p] >= 2) {
+                if (c[p + 1] == 0x04 && p + 2 < clen) ifnum = c[p + 2];
+                else if (c[p + 1] == 0x21 && p + 8 < clen && ifnum >= 0 && ifnum < 16)
+                    replen[ifnum] = (uint16_t)(c[p + 7] | (c[p + 8] << 8));
+                p += c[p];
+            }
+        }
+        for (k = 0; k < u->nif; k++) {
+            const struct zzp_if *f = &u->ifs[k];
+            uint32_t want;
+            if (f->cls != CLASS_HID) continue;
+            want = f->number < 16 && replen[f->number] ? replen[f->number] : sizeof(buf);
+            if (want > sizeof(buf)) want = sizeof(buf);
+            got = 0;
+            if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_INTERFACE, REQ_GET_DESCRIPTOR, 0x2200, f->number,
+                            buf, want, &got) == XS_OK) {
+                if (got > want) got = want;
+                bput(b, "   interface %d: HID report descriptor (%lu bytes):\n", f->number, (unsigned long)got);
+                bhex(b, buf, got);
+            }
+        }
+    }
+
+    /* record: the drivers' reports, and HID interfaces nothing drives get a reader of their own */
+    rec_nd0 = ND;
+    for (i = 0; i < B.ndev; i++) {
+        struct zzp_dev *u = &B.dev[i];
+        if (!u->used || !u->ok) continue;
+        for (k = 0; k < u->nif; k++) {
+            const struct zzp_if *f = &u->ifs[k];
+            int taken = 0;
+            if (f->cls != CLASS_HID) continue;
+            for (j = 0; j < ND; j++) if (D[j].dev == i && D[j].iface == f->number) taken = 1;
+            if (taken || ND >= MAXDRV) continue;
+            for (j = 0; j < f->nep; j++)
+                if ((f->ep[j].attr & 3) == 3 && (f->ep[j].addr & 0x80)) break;
+            if (j == f->nep) continue;
+            memset(&D[ND], 0, sizeof(D[ND]));
+            D[ND].kind = DRV_RECORD;
+            D[ND].dev = i;
+            D[ND].iface = f->number;
+            D[ND].ep = f->ep[j].addr;
+            D[ND].maxpkt = f->ep[j].maxpkt ? f->ep[j].maxpkt : 8;
+            D[ND].interval = interval_for(u, f->ep[j].interval);
+            if (arm(&D[ND]) == XS_OK) ND++;
+        }
+    }
+    for (j = 0; j < ND; j++) D[j].reclen = -1;
+    rec_head = rec_tail = 0; rec_lost = 0; rec_ms = 0; rec_ended = 0;
+    rec_on = 1;
+    bput(b, "== recording from:");
+    for (j = 0; j < ND; j++)
+        if (D[j].kind != DRV_HUB)
+            bput(b, " [address %d interface %d%s]", B.dev[D[j].dev].addr, D[j].iface,
+                 D[j].kind == DRV_RECORD ? ", not driven" : "");
+    bput(b, "\n");
+}
+
+static void dump_stop(void)
+{
+    struct zzp_xfer x;
+    int i;
+    if (!rec_on) return;
+    for (i = rec_nd0; i < ND; i++) {            /* the readers dump_start added */
+        ep_xfer(&D[i], &x, NULL, D[i].maxpkt);
+        T.periodic(T.ctx, PO_STOP, &x, D[i].interval, generation);
+    }
+    ND = rec_nd0;
+    rec_on = 0;
+}
+
+/* the reports recorded since the last call, as many as fit */
+static int dump_drain(struct sbuf *b, ULONG *out)
+{
+    ULONG n = 0;
+    static const char *const kn[] = { "", "mouse", "keyboard", "hub", "game pad", "not driven" };
+    while (rec_tail != rec_head && b->used + 280 < b->len) {
+        struct rec *e = &REC[rec_tail];
+        struct drv *d = &D[e->drv];
+        int k;
+        bput(b, "%4lu.%02lu s  address %d interface %d (%s):", (unsigned long)(e->ms / 1000),
+             (unsigned long)(e->ms % 1000 / 10), B.dev[d->dev].addr, d->iface, kn[d->kind]);
+        for (k = 0; k < e->len; k++) bput(b, " %02X", e->data[k]);
+        bput(b, "\n");
+        rec_tail = (rec_tail + 1) % REC_MAX;
+        n++;
+    }
+    out[0] = n;
+    out[1] = rec_lost;
+    return rec_ended && rec_tail == rec_head ? 1 : 0;
+}
+
 /* answer one message; 1 = ZZPlug should stop */
 static int answer(struct zzp_msg *m)
 {
@@ -682,6 +862,11 @@ static int answer(struct zzp_msg *m)
         break;
     case ZZP_MSG_RESCAN:
         rescan_wanted = 1;
+        break;
+    case ZZP_MSG_DUMP:
+        if (m->arg == 0 && b.p) { dump_stop(); dump_start(&b); }
+        else if (m->arg == 1 && b.p) m->rc = (WORD)dump_drain(&b, m->out);
+        else dump_stop();
         break;
     case ZZP_MSG_STOP:
         if (stop_refused(why)) {
@@ -776,6 +961,7 @@ int zzp_daemon(struct zzp_mailbox *mb, int quiet)
             for (i = 0; i < ND; i++)
                 if (D[i].kind == DRV_KBD) inject(ev, zzp_kbd_tick(&D[i].k, TICK_MS, ev));
             since_root += TICK_MS;
+            if (rec_on) rec_ms += TICK_MS;
             if (since_root >= ROOT_CHECK_MS) {
                 since_root = 0;
                 if (++env_ticks >= 4) { env_ticks = 0; write_env(); }   /* the counters, every 2 s */

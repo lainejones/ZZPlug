@@ -34,6 +34,8 @@ Using it, from a Shell:
   ZZPlug START [QUIET]     run it
   ZZPlug STOP              stop it (refused while a USB stick is mounted)
   ZZPlug DIAG [ALL]        the ZZ9000 firmware's USB diagnostic page
+  ZZPlug DUMP              record a device ZZPlug does not know yet, for
+                           a bug report (or Record a device... in ZZPlugPrefs)
 
 Games that read the joystick hardware directly (most WHDLoad games) don't see
 a USB pad; programs that ask lowlevel.library do.

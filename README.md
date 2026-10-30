@@ -80,6 +80,7 @@ ZZPlug LIST VERBOSE      the same with addresses, speeds, interfaces and endpoin
 ZZPlug START [QUIET]     run it (from S:User-Startup, with Run >NIL:)
 ZZPlug STOP              stop it (refused while a USB stick is mounted)
 ZZPlug DIAG [ALL]        the ZZ9000 firmware's USB diagnostic page, read only
+ZZPlug DUMP [SECS=n]     record a device ZZPlug does not know yet (see below)
 ZZPlug RESET             one root-port reset and its diagnostic record (ZZPlug stopped)
 ```
 
@@ -115,6 +116,27 @@ kind of pad keeps its own layout.
 - Keyboards are driven in boot protocol: their extra keys (media, power) are
   not. The wheel only scrolls in programs that understand NewMouse wheel
   events (most current ones do).
+
+## A device that doesn't work yet
+
+ZZPlug can record what a device it doesn't know sends, so a driver can be
+written for it without having one here. Plug the device in, open
+ZZPlugPrefs and press **Record a device...** (or run `ZZPlug DUMP` in a
+Shell). A window says what to do: press each button, move each stick or
+wheel, one at a time, for 30 seconds. The recording is saved as
+`RAM:ZZPlug-dump.txt`.
+
+[Open an issue](https://github.com/lainejones/ZZPlug/issues), attach the file,
+and say what the device is and what you pressed in which order.
+
+The file holds every device's descriptors (device, configuration and HID
+report descriptors) and each report that changed while recording, from the
+devices ZZPlug drives and from HID devices it doesn't. Recording changes
+nothing: a mouse keeps working meanwhile.
+
+```
+ZZPlug DUMP [SECS=n] [TO=file]     record for n seconds (default 30) into file
+```
 
 ## Test tools
 
