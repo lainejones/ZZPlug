@@ -1,0 +1,47 @@
+ZZPlug @VER@
+==========
+
+A small, zero-configuration USB stack for the MNT ZZ9000 (AmigaOS 3.1 or
+newer, 68020 or better). Plug a device into the ZZ9000's USB port, or into a
+hub on it, and it works:
+
+  mice         the pointer and buttons; the wheel and side buttons as
+               NewMouse events
+  keyboards    keys, qualifiers and repeat; Caps Lock and its light
+  game pads    joystick port 2 for programs that use lowlevel.library, as a
+               CD32 pad; ZZPlugPrefs sets each pad's buttons
+  USB sticks   FAT sticks mount as USB0:, USB1:, ... (CrossDOS or fat95)
+  hubs         USB 2.0 hubs, devices found and lost as they are plugged
+
+Install: double-click Install_ZZPlug. It copies ZZPlug to C: and ZZPlugPrefs
+to SYS:Prefs, puts this README and the test tools in a ZZPlug drawer where
+you say, and starts ZZPlug at boot from S:User-Startup. Run it again to
+update or to remove.
+
+Needs: firmware 2.8 or newer on the ZZ9000 (USB proxy protocol version 2).
+Mice and keyboards need a USB 2.0 hub between them and the ZZ9000. ZZPlug
+can't share the port with another USB stack (Poseidon): if one runs, ZZPlug
+says so and does not start.
+
+A hub plugged in when the Amiga is switched on is found only after it is
+unplugged and plugged in again (a ZZ9000 firmware start-up issue,
+zz9000-firmware#194); a warm reboot keeps it.
+
+Using it, from a Shell:
+  ZZPlug                   what is plugged in
+  ZZPlug LIST VERBOSE      the same with addresses, speeds and endpoints
+  ZZPlug START [QUIET]     run it
+  ZZPlug STOP              stop it (refused while a USB stick is mounted)
+  ZZPlug DIAG [ALL]        the ZZ9000 firmware's USB diagnostic page
+
+Games that read the joystick hardware directly (most WHDLoad games) don't see
+a USB pad; programs that ask lowlevel.library do.
+
+What is where:
+  C/ZZPlug                     the USB stack (to C:)
+  Prefs/ZZPlugPrefs            the prefs editor (to SYS:Prefs)
+  Tools/JoyTest                prints what lowlevel.library reads from a port
+  Tools/KeyTest                records every key a window gets
+  LICENSE                      GNU GPL version 3
+
+Source and bug reports: https://github.com/lainejones/ZZPlug

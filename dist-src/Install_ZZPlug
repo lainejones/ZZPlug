@@ -1,0 +1,142 @@
+; -------------------------------------------------------------------------
+; ZZPlug - Installer script
+; Installs ZZPlug (C:), ZZPlugPrefs (SYS:Prefs) and the test tools, and
+; starts ZZPlug at boot from S:User-Startup. Run it again to update or to
+; remove ZZPlug.
+; -------------------------------------------------------------------------
+(set @app-name "ZZPlug")
+(complete 0)
+
+(if (not (exists "C/ZZPlug"))
+    (abort "Can't find the ZZPlug files next to this script.\n\n"
+           "Run the installer from the drawer it came in."))
+(if (< (/ (getversion "exec.library" (resident)) 65536) 40)
+    (abort "ZZPlug needs AmigaOS 3.1 or newer."))
+(set cpu (database "cpu"))
+(if (or (= cpu "68000") (= cpu "68010"))
+    (abort "ZZPlug needs a 68020 or better."))
+
+(set mode
+    (askchoice (prompt "ZZPlug @VER@ - USB on the MNT ZZ9000\n\n"
+                       "ZZPlug drives the ZZ9000's USB port: mice, keyboards, game pads, "
+                       "USB sticks and hubs, with nothing to set up first. ZZPlugPrefs "
+                       "shows what is plugged in and sets the game pads' buttons.\n\n"
+                       "What do you want to do?")
+               (help "Install also updates an existing ZZPlug; your settings are kept.\n"
+                     "Remove takes ZZPlug off this Amiga.")
+               (choices "Install or update ZZPlug" "Remove ZZPlug")
+               (default 0)))
+
+(set toolsdir (getenv "ZZPlug.toolsdir"))
+
+; =========================================================================
+; REMOVE
+; =========================================================================
+(if (= mode 1)
+  (
+    (if (= 0 (askbool (prompt "Remove ZZPlug from this Amiga?\n\n"
+                              "ZZPlug stops now and USB devices on the ZZ9000 stop working. "
+                              "Its settings go too: the game pads' buttons and the FAT "
+                              "filesystem choice.")
+                      (help "ZZPlug, ZZPlugPrefs and the ZZPlug drawer are deleted, the "
+                            "line that starts ZZPlug is taken out of S:User-Startup and "
+                            "ZZPlug's settings are deleted.")
+                      (choices "Remove" "Cancel") (default 0)))
+        ((message "Nothing was changed.") (exit (quiet))))
+    (complete 10)
+    (if (exists "C:ZZPlug" (noreq)) (run "C:ZZPlug >NIL: STOP"))
+    (startup "ZZPlug"
+             (prompt "Taking the ZZPlug line out of S:User-Startup")
+             (help @startup-help)
+             (command ""))
+    (complete 40)
+    (if (exists "C:ZZPlug" (noreq)) (delete "C:ZZPlug"))
+    (if (exists "SYS:Prefs/ZZPlugPrefs" (noreq)) (delete "SYS:Prefs/ZZPlugPrefs"))
+    (if (exists "SYS:Prefs/ZZPlugPrefs.info" (noreq)) (delete "SYS:Prefs/ZZPlugPrefs.info"))
+    (if (<> toolsdir "")
+      (
+        (if (exists toolsdir (noreq)) (run (cat "Delete >NIL: \"" toolsdir "\" ALL QUIET")))
+        (if (exists (cat toolsdir ".info") (noreq)) (delete (cat toolsdir ".info")))
+      ))
+    (run "Delete >NIL: ENV:ZZPlug.#? QUIET FORCE")
+    (run "Delete >NIL: ENVARC:ZZPlug.#? QUIET FORCE")
+    (complete 100)
+    (message "ZZPlug has been removed.\n\n"
+             "If it was still running (a USB stick mounted), it stops at the next reboot.")
+    (exit (quiet))
+  ))
+
+; =========================================================================
+; INSTALL
+; =========================================================================
+; the questions first; nothing changes until the copying starts
+(if (= toolsdir "")
+    (set toolsdir
+        (tackon (askdir (prompt "Where should the ZZPlug drawer go?\n\n"
+                                "A drawer \"ZZPlug\" is made there, with the README and "
+                                "two test tools: JoyTest (game pads) and KeyTest (keyboards).")
+                        (help "Any drawer you open from Workbench, for example SYS:Tools.\n\n"
+                              "ZZPlug itself goes to C: and ZZPlugPrefs to SYS:Prefs.")
+                        (default (if (exists "SYS:Tools" (noreq)) "SYS:Tools" "SYS:")))
+                "ZZPlug")))
+
+(set bootline
+    (askbool (prompt "Start ZZPlug at every boot?\n\n"
+                     "A line that starts it goes to the end of S:User-Startup.")
+             (help "Say no if you want to start ZZPlug yourself. The line is:\n\n"
+                   "   Run >NIL: C:ZZPlug START QUIET\n\n"
+                   "ZZPlugPrefs can also start and stop it.")
+             (choices "Yes" "No, I'll start it myself") (default 0)))
+
+(if (exists "ENVARC:PsdStackloader" (noreq))
+    (message "Poseidon is installed on this Amiga.\n\n"
+             "ZZPlug and Poseidon can't share the ZZ9000's USB port: if Poseidon "
+             "starts at boot, ZZPlug says so and does not start. To use ZZPlug, turn "
+             "Poseidon's line in S:User-Startup (ENVARC:PsdStackloader) into a comment "
+             "with a \";\" in front of it."))
+
+; ---- the files -------------------------------------------------------------
+(complete 10)
+(if (exists "C:ZZPlug" (noreq)) (run "C:ZZPlug >NIL: STOP"))   ; the old one, if it runs
+(complete 20)
+(copyfiles (prompt "Copying ZZPlug to C:")
+           (help @copyfiles-help)
+           (source "C/ZZPlug") (dest "C:") (nogauge))
+(run "Protect >NIL: C:ZZPlug +rwed")
+(complete 35)
+(copyfiles (prompt "Copying ZZPlugPrefs to SYS:Prefs")
+           (help @copyfiles-help)
+           (source "Prefs/ZZPlugPrefs") (dest "SYS:Prefs") (nogauge) (infos))
+(run "Protect >NIL: SYS:Prefs/ZZPlugPrefs +rwed")
+(complete 50)
+; the drawer gets this Workbench's own drawer icon (ENV:Sys/def_drawer.info)
+(if (not (exists toolsdir (noreq))) (makedir toolsdir (infos)))
+(copyfiles (prompt "Copying the test tools and the README")
+           (help @copyfiles-help)
+           (source "Tools") (dest toolsdir) (all) (nogauge) (infos))
+(run (cat "Protect >NIL: \"" (tackon toolsdir "JoyTest") "\" +rwed"))
+(run (cat "Protect >NIL: \"" (tackon toolsdir "KeyTest") "\" +rwed"))
+(copyfiles (source "README") (dest toolsdir) (nogauge) (infos))
+(copyfiles (source "LICENSE") (dest toolsdir) (nogauge))
+(textfile (dest "ENVARC:ZZPlug.toolsdir") (append toolsdir))
+(complete 75)
+
+; ---- the boot line ---------------------------------------------------------
+(if bootline
+    (startup "ZZPlug"
+             (prompt "Adding the line that starts ZZPlug to S:User-Startup")
+             (help @startup-help)
+             (command "Run >NIL: C:ZZPlug START QUIET")))
+(complete 90)
+
+; start it now
+(run "Run >NIL: C:ZZPlug START QUIET")
+(complete 100)
+
+(message "ZZPlug @VER@ is installed and running.\n\n"
+         "ZZPlug is in C:, ZZPlugPrefs in SYS:Prefs, the test tools and the README in "
+         toolsdir ".\n\n"
+         "Mice and keyboards need a USB 2.0 hub between them and the ZZ9000. "
+         "A hub that was plugged in when the Amiga was switched on is found only "
+         "after you unplug it and plug it in again.")
+(exit (quiet))

@@ -49,6 +49,15 @@ ZZ9000's port, ZZPlug says so and does not start.
 
 ## Installing
 
+Download `ZZPlug-<version>.lha` (or the `.adf` install floppy) from the
+[releases](https://github.com/lainejones/ZZPlug/releases), unpack it and
+double-click **Install_ZZPlug**. It copies ZZPlug to `C:` and ZZPlugPrefs to
+`SYS:Prefs`, puts the README and the test tools in a ZZPlug drawer, starts
+ZZPlug at boot from `S:User-Startup` and starts it now. Run it again to
+update or to remove ZZPlug.
+
+By hand instead:
+
 1. Copy `ZZPlug` to `C:` and `ZZPlugPrefs` (with its icon) to `SYS:Prefs`.
 2. Add this to `S:User-Startup`:
 
@@ -115,6 +124,11 @@ kind of pad keeps its own layout.
 
 The Amiga programs are built with amiga-gcc (bebbo) in WSL; `build.ps1`
 builds `out/ZZPlug`, `out/ZZPlugPrefs`, `out/JoyTest` and `out/KeyTest`.
+`dist.sh` stages the release drawer in `dist/` (the committed icons in
+`icons/`, the installer and package README from `dist-src/`);
+`tools/mkadf.sh` makes the install floppy from it. The `.lha` is made on an
+Amiga (`LhA -r a ZZPlug-<version>.lha ZZPlug ZZPlug.info`) so the files keep
+their protection bits.
 `test.ps1` builds and runs the host tests: the USB core, hubs, the HID and
 mass-storage code and the game pad mapping against a simulated bus, on the PC.
 
