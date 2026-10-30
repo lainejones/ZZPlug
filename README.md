@@ -1,4 +1,4 @@
-# ZZPlug
+# <img src="docs/zzplug-icon-small.png" alt="" width="72" align="right"> ZZPlug
 
 A small, zero-configuration USB stack for the **MNT ZZ9000** in an Amiga
 (AmigaOS 3.1 or newer). Plug a device into the ZZ9000's USB port, or into a
@@ -9,7 +9,17 @@ host work itself: port resets, enumeration, hubs, then a driver for each kind
 of device. It says in plain words what it found, and what is wrong when
 something doesn't work.
 
-![ZZPlugPrefs](docs/zzplugprefs.png)
+## ZZPlugPrefs
+
+![ZZPlugPrefs on an A4000: a hub, a game pad and a mouse, the pad's details on the right](docs/zzplugprefs.png)
+
+*ZZPlugPrefs on an A4000: a hub with a game pad and a mouse behind it; the pad
+is selected and its details are on the right.*
+
+<img src="docs/zzplug-icon.png" alt="The ZZPlugPrefs icon, normal and selected" width="312">
+
+*Its icon: a USB plug under a port. Clicked, the plug goes home and a green
+light comes on.*
 
 ## What it supports
 
