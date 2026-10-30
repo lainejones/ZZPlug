@@ -40,7 +40,7 @@
 #include <proto/gadtools.h>
 #include "zzpmsg.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs 0.7 (29.10.2026)";
+static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs 0.8 (29.10.2026)";
 
 #define PORTNAME "ZZPlug"
 #define VAR_DOSTYPE "ZZPlug.dostype"

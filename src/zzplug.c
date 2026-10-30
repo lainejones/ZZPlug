@@ -21,6 +21,7 @@
 #include <exec/ports.h>
 #include <exec/execbase.h>
 #include <dos/dos.h>
+#include <dos/datetime.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
 #include "core.h"
@@ -31,7 +32,7 @@
 #include "diag.h"
 #include "zzpmsg.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.7 (29.10.2026)";
+static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.8 (29.10.2026)";
 
 static struct zzp_mailbox MB;
 static struct zzp_transport T;
@@ -81,6 +82,20 @@ static int show_running(void)
 }
 
 /* ---- ZZPlug DUMP ---- */
+/* "when": the Amiga's date and time, as DOS writes it (a dead clock shows 1978) */
+static void when_text(char *out)
+{
+    struct DateTime dt;
+    char day[16], date[16], time[16];
+    memset(&dt, 0, sizeof(dt));
+    DateStamp(&dt.dat_Stamp);
+    dt.dat_Format = FORMAT_DOS;
+    dt.dat_StrDay = (STRPTR)day; dt.dat_StrDate = (STRPTR)date; dt.dat_StrTime = (STRPTR)time;
+    day[0] = date[0] = time[0] = 0;
+    DateToStr(&dt);
+    sprintf(out, "%s %s %s", day, date, time);
+}
+
 static int ask_daemon(UWORD cmd, LONG arg, char *buf, ULONG len, ULONG *out, struct MsgPort *reply)
 {
     struct zzp_msg m;
@@ -111,7 +126,6 @@ static int dump(LONG secs, const char *to)
     ULONG out[2], lines = 0, lost = 0;
     LONG ticks, left, shown = -1;
     int r, rc = RETURN_OK;
-    struct DateStamp ds;
 
     if (!reply || !buf) { printf("ZZPlug DUMP: out of memory\n"); rc = RETURN_FAIL; goto done; }
     if (!running()) {
@@ -123,10 +137,9 @@ static int dump(LONG secs, const char *to)
     if (secs < 5) secs = 5;
     if (secs > 600) secs = 600;
 
-    DateStamp(&ds);
-    fprintf(f, "ZZPlug DUMP - %s, Kickstart %d.%d, day %ld %02ld:%02ld\n", ver + 6,
-            SysBase->LibNode.lib_Version, SysBase->SoftVer, (long)ds.ds_Days,
-            (long)(ds.ds_Minute / 60), (long)(ds.ds_Minute % 60));
+    when_text(line);
+    fprintf(f, "ZZPlug DUMP - %s, Kickstart %d.%d\nRecorded: %s\n", ver + 6,
+            SysBase->LibNode.lib_Version, SysBase->SoftVer, line);
     fprintf(f, "Send this file with a report at https://github.com/lainejones/ZZPlug/issues\n\n");
     if ((e = fopen(ZZP_ENVFILE, "r"))) {        /* what is plugged in, as LIST VERBOSE shows it */
         while (fgets(line, sizeof(line), e)) fputs(line, f);
@@ -168,7 +181,8 @@ static int dump(LONG secs, const char *to)
     fclose(f);
     printf("\n\nDone: %lu reports. Saved to %s\n\n"
            "Please send it with a report at\n  https://github.com/lainejones/ZZPlug/issues\n"
-           "and say what the device is, and what you pressed or moved in which order.\n",
+           "(New issue, then \"A device that doesn't work\"): what the device is, what\n"
+           "happens, when, where, how - and what you pressed or moved in which order.\n",
            (unsigned long)lines, to);
 done:
     if (buf) FreeMem(buf, 32768);

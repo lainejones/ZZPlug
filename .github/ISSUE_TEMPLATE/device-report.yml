@@ -6,35 +6,51 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping ZZPlug learn a new device! A recording lets us write a driver for it
-        without having one here.
+        Thanks for helping ZZPlug learn a new device! The more of the **what, when, where, why
+        and who** you can answer, the quicker we can help.
 
-        **Make the recording on the Amiga:** plug the device in, open **ZZPlugPrefs** and press
+        **First make a recording on the Amiga:** plug the device in, open **ZZPlugPrefs** and press
         **Record a device...** (or run `ZZPlug DUMP` in a Shell). Follow the steps in the window:
-        press each button and move each stick or wheel, one at a time. The recording is saved as
-        `RAM:ZZPlug-dump.txt`; copy it somewhere you can reach from the browser.
+        press each button and move each stick or wheel, one at a time. It is saved as
+        `RAM:ZZPlug-dump.txt` and already answers a lot by itself: your Amiga, its OS, the ZZ9000,
+        every USB device and what it sent, and when it was recorded.
   - type: input
-    id: device
+    id: what-device
     attributes:
       label: What is the device?
       description: Make and model, and what kind of thing it is (game pad, keyboard, serial adapter...).
-      placeholder: e.g. "8BitDo SN30 Pro, game pad (USB cable)"
+      placeholder: e.g. "8BitDo SN30 Pro, game pad, USB cable"
     validations:
       required: true
   - type: textarea
-    id: what
+    id: what-happens
     attributes:
-      label: What happens?
-      description: What should it do on the Amiga, and what does it do now (nothing at all, wrong buttons, ...)?
+      label: What happens, and what should happen?
+      description: Nothing at all, some buttons wrong, it stops after a while...? What did you expect?
     validations:
       required: true
   - type: textarea
-    id: order
+    id: when
     attributes:
-      label: What you pressed or moved while recording, in order
-      description: It helps us match the recording to the buttons.
+      label: When does it happen?
+      description: Always, or only sometimes? Straight away when plugged in, after a cold start, after a while, after a reboot? Did it ever work (an older ZZPlug, another USB stack, another computer)?
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where?
+      description: Plugged straight into the ZZ9000 or into a hub (which one, does it have its own power)? Which port? Which program or game were you using it in?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why / how - the steps
+      description: What you did, step by step, so we can do the same. And what you pressed or moved while recording, in order - it helps us match the recording to the buttons.
       placeholder: |
-        A, B, X, Y, left shoulder, right shoulder, select, start,
+        Plugged the pad into the hub after Workbench was up, opened ZZPlugPrefs...
+        Recording: A, B, X, Y, left shoulder, right shoulder, select, start,
         D-pad up, down, left, right, left stick all round
     validations:
       required: true
@@ -46,8 +62,8 @@ body:
     validations:
       required: true
   - type: input
-    id: system
+    id: who
     attributes:
-      label: Your Amiga
-      description: Model, AmigaOS version, ZZ9000 firmware version, and the USB hub in between.
-      placeholder: e.g. "A4000, OS 3.2.3, firmware 2.9.1, powered USB 2.0 hub"
+      label: Who - your Amiga
+      description: The recording has most of this; add what it can't know, like a CPU card or other expansions.
+      placeholder: e.g. "A4000, TF4060 68060, OS 3.2.3, ZZ9000 firmware 2.9.1"
