@@ -2,8 +2,8 @@ ZZPlug @VER@
 ==========
 
 A small, zero-configuration USB stack for the MNT ZZ9000 (AmigaOS 3.1 or
-newer, 68020 or better). Plug a device into the ZZ9000's USB port, or into a
-hub on it, and it works:
+newer, 68020 or better). Put a USB 2.0 hub on the ZZ9000's USB port, plug
+your devices into it, and they work:
 
   mice         the pointer and buttons; the wheel and side buttons as
                NewMouse events
@@ -19,7 +19,8 @@ you say, and starts ZZPlug at boot from S:User-Startup. Run it again to
 update or to remove.
 
 Needs: firmware 2.8 or newer on the ZZ9000 (USB proxy protocol version 2).
-Mice and keyboards need a USB 2.0 hub between them and the ZZ9000. ZZPlug
+Mice, keyboards and game pads need a USB 2.0 hub between them and the
+ZZ9000; USB sticks can also go straight into its port. ZZPlug
 can't share the port with another USB stack (Poseidon): if one runs, ZZPlug
 says so and does not start.
 

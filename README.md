@@ -1,8 +1,10 @@
 # <img src="docs/zzplug-icon-small.png" alt="" width="72" align="right"> ZZPlug
 
 A small, zero-configuration USB stack for the **MNT ZZ9000** in an Amiga
-(AmigaOS 3.1 or newer). Plug a device into the ZZ9000's USB port, or into a
-hub on it, and it works: there is nothing to set up first.
+(AmigaOS 3.1 or newer). Put a USB 2.0 hub on the ZZ9000's USB port, plug
+your devices into the hub, and they work: there is nothing to set up first.
+Mice, keyboards and game pads need the hub; USB sticks can also go straight
+into the ZZ9000's port.
 
 ZZPlug talks to the ZZ9000 firmware's USB proxy directly and does the USB
 host work itself: port resets, enumeration, hubs, then a driver for each kind
@@ -41,8 +43,9 @@ driver for it yet.
 - AmigaOS 3.1 or newer and a 68020 or better.
 - lowlevel.library for game pads; CrossDOS (`L:CrossDOSFileSystem`) or fat95
   (`L:fat95`) for USB sticks.
-- Low-speed devices (most mice and keyboards) need a USB 2.0 hub between them
-  and the ZZ9000: the ZZ9000's own port doesn't talk to them directly.
+- Mice, keyboards and game pads need a USB 2.0 hub between them and the
+  ZZ9000: they are low-speed devices, and the ZZ9000's own port doesn't talk
+  to them directly. USB sticks work with or without the hub.
 
 ZZPlug can't share the port with another USB stack. If one is running on the
 ZZ9000's port, ZZPlug says so and does not start.

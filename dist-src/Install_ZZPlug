@@ -136,7 +136,8 @@
 (message "ZZPlug @VER@ is installed and running.\n\n"
          "ZZPlug is in C:, ZZPlugPrefs in SYS:Prefs, the test tools and the README in "
          toolsdir ".\n\n"
-         "Mice and keyboards need a USB 2.0 hub between them and the ZZ9000. "
+         "Mice, keyboards and game pads need a USB 2.0 hub between them and the "
+         "ZZ9000; USB sticks can also go straight into its port. "
          "A hub that was plugged in when the Amiga was switched on is found only "
          "after you unplug it and plug it in again.")
 (exit (quiet))
