@@ -32,7 +32,7 @@
 #include "diag.h"
 #include "zzpmsg.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.8 (29.10.2026)";
+static const char ver[] __attribute__((used)) = "$VER: ZZPlug 0.8.1 (30.10.2026)";
 
 static struct zzp_mailbox MB;
 static struct zzp_transport T;

@@ -44,8 +44,8 @@
 #include "zzpmsg.h"
 #include "amigui.h"
 
-#define PREFS_VERSION "0.8"
-static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs " PREFS_VERSION " (29.10.2026)";
+#define PREFS_VERSION "0.8.1"
+static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs " PREFS_VERSION " (30.10.2026)";
 static const char about_text[] =
     "The prefs editor of ZZPlug, a small USB stack\n"
     "for the ZZ9000: what is plugged in, Start/Stop,\n"
