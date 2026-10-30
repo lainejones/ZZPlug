@@ -128,7 +128,9 @@ int zzp_padmap_order_for(uint16_t vid, uint16_t pid, uint8_t *order)
     /* SNES-style pad, HID buttons 1-4 = X (top, blue cap), A (right, red cap),
      * B (bottom, yellow cap), Y (left, green cap): each Amiga colour on the cap
      * of the same colour, so red (fire) is the right-hand A button */
-    if (vid == 0x081f && pid == 0xe401) {
+    /* NES-style pad 0810:E501: HID button 1 = B (left), 2 = A (right); the same
+     * order makes the right-hand A button red (fire) and B blue */
+    if ((vid == 0x081f && pid == 0xe401) || (vid == 0x0810 && pid == 0xe501)) {
         static const uint8_t o[4] = { 2, 1, 4, 3 };
         memcpy(order, o, sizeof(o));
         return 4;

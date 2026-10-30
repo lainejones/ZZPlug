@@ -277,6 +277,12 @@ int main(void)
             CHECK(n2 == 4 && zzp_padmap_reorder(&pm, order, n2) == 4, "the 081F:E401 pad has a known layout");
             s = zzp_pad_state(&pm, leftup_a, 8, &bt);       /* HID button 1 = the top face button */
             CHECK((s & (PAD_BLUE | PAD_GREEN | PAD_RED)) == PAD_BLUE, "after reordering, its top (blue-cap) button is blue and not fire");
+            zzp_padmap_parse(&pm, d1, sizeof(d1));
+            n2 = zzp_padmap_order_for(0x0810, 0xe501, order);
+            CHECK(n2 == 4 && zzp_padmap_reorder(&pm, order, n2) == 4, "the 0810:E501 NES pad has a known layout");
+            s = zzp_pad_state(&pm, leftup_a, 8, &bt);       /* HID button 1 = B, on the left */
+            CHECK((s & (PAD_BLUE | PAD_RED)) == PAD_BLUE, "after reordering, its left B button is blue and right A is fire");
+            CHECK(zzp_padmap_order_for(0x0079, 0x0006, order) == 0, "the shared 0079:0006 chip keeps the pad's own order");
         }
     }
 
