@@ -21,6 +21,7 @@ struct zzp_field {
 struct zzp_padmap {
     uint8_t uses_ids;
     struct zzp_field x, y, hat;
+    struct zzp_field wheel, pan;                /* a mouse's wheel and tilt wheel (AC Pan) */
     struct zzp_field button[PAD_MAXBUTTONS];
     int nbuttons;
 };
@@ -39,6 +40,8 @@ struct zzp_padmap {
 #define PAD_BLUE   (1UL << 23)
 
 int  zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *desc, int len);   /* 1 = looks like a pad/joystick */
+int  zzp_mousemap_parse(struct zzp_padmap *m, const uint8_t *desc, int len); /* 1 = a mouse: X, Y and buttons */
+int32_t zzp_field_value(const struct zzp_field *f, const uint8_t *r, int len, int uses_ids);   /* 0 if absent */
 /* which HID button plays which part: order[0] = the button for red (fire), then blue, green, yellow,
  * reverse, forward, ... (1-based HID button numbers, 0 = leave, PAD_NONE = no button there).
  * Returns the number applied. */

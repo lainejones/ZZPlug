@@ -4,8 +4,8 @@
  * hidrep.c - the HID report descriptor walked item by item (USB HID 1.11,
  * section 6.2.2): global items set the usage page, logical range, size,
  * count and report ID; local items name the usages; each Input item lays
- * out `count` fields of `size` bits. We keep the first X, Y, hat switch and
- * the first 16 buttons.
+ * out `count` fields of `size` bits. We keep the first X, Y, hat switch,
+ * wheel, tilt wheel and the first 16 buttons: game pads and mice alike.
  */
 #include <string.h>
 #include "hidrep.h"
@@ -15,6 +15,9 @@
 #define U_X   0x30
 #define U_Y   0x31
 #define U_HAT 0x39
+#define U_WHEEL 0x38
+#define PAGE_CONSUMER 0x0c
+#define U_PAN 0x238                             /* AC Pan: a tilt wheel */
 
 static int32_t sval(const uint8_t *p, int n)
 {
@@ -38,7 +41,8 @@ static void set(struct zzp_field *f, uint8_t id, uint16_t bit, uint16_t size, in
     f->present = 1; f->report_id = id; f->bit = bit; f->size = size; f->lmin = lmin; f->lmax = lmax;
 }
 
-int zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
+/* walk the descriptor into m; bit 0 = it has a joystick or game pad collection, bit 1 = a mouse */
+static int walk(struct zzp_padmap *m, const uint8_t *d, int len)
 {
     uint32_t page = 0, rsize = 0, rcount = 0, usages[32], umin = 0, umax = 0;
     int32_t lmin = 0, lmax = 0;
@@ -80,7 +84,9 @@ int zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
             else if (tag == 2) { umax = u; have_range = 1; }
         } else if (type == 0) {                 /* main */
             if (tag == 0x0a && page == PAGE_DESKTOP && nus && (usages[0] == 0x04 || usages[0] == 0x05))
-                is_pad = 1;                     /* a joystick or game pad collection */
+                is_pad |= 1;                    /* a joystick or game pad collection */
+            if (tag == 0x0a && page == PAGE_DESKTOP && nus && usages[0] == 0x02)
+                is_pad |= 2;                    /* a mouse collection */
             if (tag == 0x08) {                  /* Input */
                 uint32_t flags = uval(p, n), k;
                 int constant = flags & 1;
@@ -94,6 +100,8 @@ int zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
                         if (page == PAGE_DESKTOP && u == U_X) set(&m->x, id, bit, (uint16_t)rsize, lmin, lmax);
                         else if (page == PAGE_DESKTOP && u == U_Y) set(&m->y, id, bit, (uint16_t)rsize, lmin, lmax);
                         else if (page == PAGE_DESKTOP && u == U_HAT) set(&m->hat, id, bit, (uint16_t)rsize, lmin, lmax);
+                        else if (page == PAGE_DESKTOP && u == U_WHEEL) set(&m->wheel, id, bit, (uint16_t)rsize, lmin, lmax);
+                        else if (page == PAGE_CONSUMER && u == U_PAN) set(&m->pan, id, bit, (uint16_t)rsize, lmin, lmax);
                         else if (page == PAGE_BUTTON && u >= 1 && u <= PAD_MAXBUTTONS) {
                             set(&m->button[u - 1], id, bit, (uint16_t)rsize, lmin, lmax);
                             if ((int)u > m->nbuttons) m->nbuttons = (int)u;
@@ -107,7 +115,18 @@ int zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
             }
         }
     }
-    return is_pad && (m->x.present || m->hat.present) && m->nbuttons > 0;
+    return is_pad;
+}
+
+int zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
+{
+    return (walk(m, d, len) & 1) && (m->x.present || m->hat.present) && m->nbuttons > 0;
+}
+
+int zzp_mousemap_parse(struct zzp_padmap *m, const uint8_t *d, int len)
+{
+    return (walk(m, d, len) & 2) && m->x.present && m->y.present && m->x.size <= 16 && m->y.size <= 16
+           && m->nbuttons > 0;
 }
 
 int zzp_padmap_reorder(struct zzp_padmap *m, const uint8_t *order, int n)
@@ -169,6 +188,11 @@ static int32_t field(const struct zzp_field *f, const uint8_t *r, int len, int u
     if (f->lmin < 0 && f->size < 32 && (v & (1u << (f->size - 1))))   /* sign-extend */
         v |= ~0u << f->size;
     return (int32_t)v;
+}
+
+int32_t zzp_field_value(const struct zzp_field *f, const uint8_t *r, int len, int uses_ids)
+{
+    return field(f, r, len, uses_ids);
 }
 
 /* an axis read as -1, 0 or +1: the outer quarters of the range count */

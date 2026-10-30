@@ -68,17 +68,44 @@ void zzp_mouse_init(struct zzp_mouse *m, struct zzp_hid_shared *sh)
     m->sh = sh;
 }
 
+/* the wheel's clicks as NewMouse raw keys, down and up */
+static void wheel_keys(struct zzp_mouse *m, struct zzp_event *ev, int *n, int w, uint8_t plus, uint8_t minus)
+{
+    uint8_t c = w > 0 ? plus : minus;
+    int k;
+    if (w < 0) w = -w;
+    for (k = 0; k < w && k < 4; k++) {
+        add(ev, n, ZE_RAWKEY, c, qual(m->sh), 0, 0);
+        add(ev, n, ZE_RAWKEY, (uint8_t)(c | ZC_UP), qual(m->sh), 0, 0);
+    }
+}
+
 int zzp_mouse_report(struct zzp_mouse *m, const uint8_t *r, int len, struct zzp_event *ev)
 {
     static const uint8_t code[3] = { ZC_LBUTTON, ZC_RBUTTON, ZC_MBUTTON };
     static const uint16_t bq[3] = { ZQ_LBUTTON, ZQ_RBUTTON, ZQ_MBUTTON };
-    int n = 0, i, dx, dy, moved;
+    int n = 0, i, dx, dy, moved, wheel = 0, pan = 0;
     uint8_t b;
 
-    if (len < 3) return 0;
-    b = (uint8_t)(r[0] & 7);
-    dx = (int8_t)r[1];
-    dy = (int8_t)r[2];
+    if (m->full) {                              /* report protocol: where the descriptor says */
+        const struct zzp_padmap *p = &m->map;
+        if (p->uses_ids && (len < 1 || r[0] != p->x.report_id)) return 0;   /* another report */
+        b = 0;
+        for (i = 0; i < 5 && i < p->nbuttons; i++)
+            if (zzp_field_value(&p->button[i], r, len, p->uses_ids)) b |= (uint8_t)(1 << i);
+        dx = zzp_field_value(&p->x, r, len, p->uses_ids);
+        dy = zzp_field_value(&p->y, r, len, p->uses_ids);
+        if (dx > 127) dx = 127; else if (dx < -127) dx = -127;   /* input.device takes small steps */
+        if (dy > 127) dy = 127; else if (dy < -127) dy = -127;
+        wheel = zzp_field_value(&p->wheel, r, len, p->uses_ids);
+        pan = zzp_field_value(&p->pan, r, len, p->uses_ids);
+    } else {
+        if (len < 3) return 0;
+        b = (uint8_t)(r[0] & 7);
+        dx = (int8_t)r[1];
+        dy = (int8_t)r[2];
+        if (len >= 4) wheel = (int8_t)r[3];     /* boot mice that send their wheel anyway */
+    }
     moved = dx || dy;
     for (i = 0; i < 3; i++) {
         uint8_t was = (uint8_t)(m->buttons & (1 << i)), now = (uint8_t)(b & (1 << i));
@@ -89,25 +116,27 @@ int zzp_mouse_report(struct zzp_mouse *m, const uint8_t *r, int len, struct zzp_
             moved ? dx : 0, moved ? dy : 0);
         moved = 0;
     }
+    for (i = 3; i < 5; i++) {                   /* the side buttons, as NewMouse raw keys */
+        uint8_t was = (uint8_t)(m->buttons & (1 << i)), now = (uint8_t)(b & (1 << i));
+        if (was == now) continue;
+        add(ev, &n, ZE_RAWKEY, (uint8_t)((i == 3 ? ZC_BUTTON4 : ZC_BUTTON5) | (now ? 0 : ZC_UP)), qual(m->sh), 0, 0);
+    }
     m->buttons = b;
     if (moved)
         add(ev, &n, ZE_RAWMOUSE, ZC_NOBUTTON, (uint16_t)(qual(m->sh) | ZQ_RELMOUSE), dx, dy);
-    if (len >= 4 && r[3]) {                       /* the wheel, as NewMouse raw keys */
-        int w = (int8_t)r[3], k;
-        uint8_t c = w > 0 ? ZC_WHEEL_UP : ZC_WHEEL_DOWN;
-        if (w < 0) w = -w;
-        for (k = 0; k < w && k < 4; k++) {
-            add(ev, &n, ZE_RAWKEY, c, qual(m->sh), 0, 0);
-            add(ev, &n, ZE_RAWKEY, (uint8_t)(c | ZC_UP), qual(m->sh), 0, 0);
-        }
-    }
+    if (wheel) wheel_keys(m, ev, &n, wheel, ZC_WHEEL_UP, ZC_WHEEL_DOWN);
+    if (pan) wheel_keys(m, ev, &n, pan, ZC_WHEEL_RIGHT, ZC_WHEEL_LEFT);
     return n;
 }
 
 int zzp_mouse_release(struct zzp_mouse *m, struct zzp_event *ev)
 {
     uint8_t r[3] = { 0, 0, 0 };
-    return zzp_mouse_report(m, r, 3, ev);
+    int full = m->full, n;
+    m->full = 0;                                /* everything up, through the plain path */
+    n = zzp_mouse_report(m, r, 3, ev);
+    m->full = full;
+    return n;
 }
 
 /* ---- keyboard ------------------------------------------------------------- */

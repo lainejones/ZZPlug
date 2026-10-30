@@ -165,6 +165,38 @@ int main(void)
               "a wheel click down is a NewMouse wheel-down key press and release");
     }
 
+    printf("[mouse in report protocol: wheel and side buttons]\n");
+    {
+        /* a usual 5-button wheel mouse: buttons 1-5, 3 bits padding, X, Y, wheel (8 bits, signed) */
+        static const uint8_t md[] = {
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x05, 0x15, 0x00, 0x25, 0x01, 0x95, 0x05, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x03, 0x81, 0x01,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+            0xC0, 0xC0 };
+        struct zzp_hid_shared sh = { 0, 0 };
+        struct zzp_mouse mo;
+        struct zzp_event ev[ZZP_MAXEVENTS];
+        uint8_t m1[4] = { 0x08, 5, (uint8_t)-3, 1 }, m2[4] = { 0x00, 0, 0, 0 }, m3[4] = { 0x10, 0, 0, (uint8_t)-2 };
+        zzp_mouse_init(&mo, &sh);
+        CHECK(zzp_mousemap_parse(&mo.map, md, sizeof(md)) && mo.map.wheel.present && mo.map.nbuttons == 5,
+              "the descriptor reads as a mouse with 5 buttons and a wheel");
+        CHECK(!zzp_padmap_parse(&mo.map, md, sizeof(md)), "a mouse is not taken for a game pad");
+        zzp_mousemap_parse(&mo.map, md, sizeof(md));
+        mo.full = 1;
+        n = zzp_mouse_report(&mo, m1, 4, ev);
+        CHECK(n == 4 && ev[0].cls == ZE_RAWKEY && ev[0].code == ZC_BUTTON4 && ev[1].cls == ZE_RAWMOUSE &&
+              ev[1].dx == 5 && ev[1].dy == -3 && ev[2].code == ZC_WHEEL_UP && ev[3].code == (ZC_WHEEL_UP | ZC_UP),
+              "button 4 down, the movement, one wheel click up");
+        n = zzp_mouse_report(&mo, m2, 4, ev);
+        CHECK(n == 1 && ev[0].code == (ZC_BUTTON4 | ZC_UP), "button 4 up");
+        n = zzp_mouse_report(&mo, m3, 4, ev);
+        CHECK(n == 5 && ev[0].code == ZC_BUTTON5 && ev[1].code == ZC_WHEEL_DOWN && ev[3].code == ZC_WHEEL_DOWN,
+              "button 5 down and two wheel clicks down");
+        n = zzp_mouse_release(&mo, ev);
+        CHECK(n == 1 && ev[0].code == (ZC_BUTTON5 | ZC_UP) && mo.full, "unplugged: button 5 goes up, the mouse stays full");
+    }
+
     printf("[keyboard reports]\n");
     {
         struct zzp_hid_shared sh = { 0, 0 };

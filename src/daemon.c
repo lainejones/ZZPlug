@@ -352,9 +352,21 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
         d->slot = npads;
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_IDLE, 0, f->number, NULL, 0, NULL);
     }
+    if (kind == DRV_MOUSE) {
+        /* the report descriptor: a wheel and side buttons if it has them (report protocol);
+         * a descriptor that does not read as a mouse leaves it in boot protocol */
+        static uint8_t desc[512];
+        uint32_t got = 0;
+        if (zzp_control(&B, u, RT_IN | RT_STANDARD | RT_INTERFACE, REQ_GET_DESCRIPTOR, 0x2200, f->number,
+                        desc, sizeof(desc), &got) == XS_OK && zzp_mousemap_parse(&d->m.map, desc, (int)got)
+            && zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_PROTOCOL, 1, f->number,
+                           NULL, 0, NULL) == XS_OK)
+            d->m.full = 1;
+    }
     if (kind == DRV_MOUSE || kind == DRV_KBD) {
-        /* boot protocol, and reports only on change */
-        zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_PROTOCOL, 0, f->number, NULL, 0, NULL);
+        /* boot protocol (unless the mouse reads in full), and reports only on change */
+        if (!(kind == DRV_MOUSE && d->m.full))
+            zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_PROTOCOL, 0, f->number, NULL, 0, NULL);
         zzp_control(&B, u, RT_OUT | RT_CLASS | RT_INTERFACE, HID_SET_IDLE, 0, f->number, NULL, 0, NULL);
     }
     if (kind == DRV_KBD) {                      /* the lights from the start: num lock on, caps as it is */
@@ -382,6 +394,10 @@ static void write_env(void)
                 i, kind[d->kind], B.dev[d->dev].addr, d->ep & 15, d->interval,
                 B.dev[d->dev].speed == SPEED_HIGH ? "microframes" : "ms",
                 (unsigned long)d->reports, (unsigned long)d->naks, (unsigned long)d->errors, zzp_status_name(d->last));
+        if (d->kind == DRV_MOUSE)
+            fprintf(f, "    %s\n", d->m.full ? (d->m.map.wheel.present ? "report protocol: wheel and up to 5 buttons"
+                                                                      : "report protocol: up to 5 buttons")
+                                         : "boot protocol: 3 buttons");
         if (d->kind == DRV_PAD) {
             fprintf(f, "    joystick port %d (lowlevel port %d): %d buttons, X %s, Y %s, hat %s; state %08lX; last report",
                     joy_port_of(d->slot) + 1, joy_port_of(d->slot), d->pm.nbuttons,
@@ -510,6 +526,9 @@ static void dev_status(int i, char *s)
         if (d->dev != i) continue;
         if (s[0]) strcat(s, ", ");
         if (d->kind == DRV_HUB) sprintf(s + strlen(s), "hub, %d ports", u->hub_ports);
+        else if (d->kind == DRV_MOUSE && d->m.full)
+            sprintf(s + strlen(s), "mouse, %d buttons%s, working", d->m.map.nbuttons > 5 ? 5 : d->m.map.nbuttons,
+                    d->m.map.wheel.present ? (d->m.map.pan.present ? ", wheel, tilt" : ", wheel") : "");
         else if (d->kind == DRV_MOUSE) strcat(s, "mouse, working");
         else if (d->kind == DRV_KBD) strcat(s, "keyboard, working");
         else if (d->kind == DRV_PAD) sprintf(s + strlen(s), "game pad, joystick port %d", joy_port_of(d->slot) + 1);

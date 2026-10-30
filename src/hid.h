@@ -9,6 +9,7 @@
 #ifndef ZZP_HID_H
 #define ZZP_HID_H
 #include <stdint.h>
+#include "hidrep.h"
 
 /* input.device classes and codes (devices/inputevent.h) */
 #define ZE_RAWKEY   0x01
@@ -20,6 +21,10 @@
 #define ZC_NOBUTTON 0xff
 #define ZC_WHEEL_UP   0x7a      /* NewMouse raw keys */
 #define ZC_WHEEL_DOWN 0x7b
+#define ZC_WHEEL_LEFT  0x7c
+#define ZC_WHEEL_RIGHT 0x7d
+#define ZC_BUTTON4  0x7e        /* NewMouse's fourth button */
+#define ZC_BUTTON5  0x7f        /* a fifth: no NewMouse standard, the next free raw key */
 /* qualifiers */
 #define ZQ_LSHIFT   0x0001
 #define ZQ_RSHIFT   0x0002
@@ -56,6 +61,8 @@ struct zzp_hid_shared {
 struct zzp_mouse {
     uint8_t buttons;
     struct zzp_hid_shared *sh;
+    int full;                   /* 1 = report protocol, read with map; 0 = the 3-byte boot report */
+    struct zzp_padmap map;
 };
 
 struct zzp_kbd {
