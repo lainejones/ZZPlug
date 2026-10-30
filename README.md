@@ -26,7 +26,7 @@ light comes on.*
 | Device | What you get |
 |---|---|
 | USB 2.0 hubs | Everything plugged into them, found and lost as you plug and unplug. Low- and full-speed devices behind a high-speed hub work through its transaction translator. |
-| Mice (boot protocol) | The Amiga's pointer and buttons, through input.device. |
+| Mice | The pointer and buttons through input.device; the wheel (and a tilt wheel) as NewMouse wheel events, side buttons as NewMouse's 4th and 5th button. ZZPlug reads each mouse's own report layout; a mouse that only sends simple boot reports still gets its wheel and side buttons when it puts them there. |
 | Keyboards (boot protocol) | Keys, qualifiers and repeat, through input.device. Caps Lock and its light work like the Amiga's; the Num Lock light stays on (the Amiga's keypad always gives numbers). On a keyboard without a right Windows key, the Menu key is the right Amiga key. |
 | Game pads and joysticks (HID) | Joystick port 2 for programs that use lowlevel.library (`ReadJoyPort`), as a CD32 pad: directions plus red, blue, green, yellow, reverse, forward and play. |
 | USB sticks (mass storage) | Mounted as `USB0:`, `USB1:`, ... through `zzusbdisk.device`. FAT12/16/32 sticks with or without a partition table; CrossDOS (comes with AmigaOS) or fat95. The same stick keeps its unit when it comes back. |
@@ -93,8 +93,9 @@ Save keeps the settings, Use keeps them until the next reboot.
   [zz9000-firmware#194](https://github.com/BlitterStudio/zz9000-firmware/issues/194).
 - Games that read the joystick hardware directly don't see a USB pad; programs
   that ask lowlevel.library do (system-friendly games, CD32 titles, emulators).
-- Only boot-protocol mice and keyboards are driven: their extra keys (media,
-  power) are not.
+- Keyboards are driven in boot protocol: their extra keys (media, power) are
+  not. The wheel only scrolls in programs that understand NewMouse wheel
+  events (most current ones do).
 
 ## Test tools
 
