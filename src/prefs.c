@@ -77,6 +77,7 @@ static struct MsgPort *reply;
 static ULONG dostype;                           /* 0 = ZZPlug's default (CrossDOS) */
 static char padset[64];                         /* "" = automatic */
 static char padset_was[64];
+static ULONG padid;                             /* the plugged-in pad's USB ID, 0 = none seen yet */
 static char fatlabel_other[40];
 static STRPTR fatlabels[4];
 static int fatactive;
@@ -113,7 +114,7 @@ static int ask(UWORD cmd, LONG arg, char *buf, ULONG len, ULONG *out)
     if (!p) return -2;                          /* ZZPlug is not running */
     WaitPort(reply);
     GetMsg(reply);
-    if (out) { out[0] = m.out[0]; out[1] = m.out[1]; out[2] = m.out[2]; }
+    if (out) { out[0] = m.out[0]; out[1] = m.out[1]; out[2] = m.out[2]; out[3] = m.out[3]; }
     return m.rc;
 }
 
@@ -252,6 +253,30 @@ static void pad_words(ULONG s, char *out)
     if (!out[0]) strcpy(out, "nothing pressed");
 }
 
+static void show_padset(void);
+
+/* the variable a pad's buttons are kept in: one per kind of pad, so pads with
+ * different layouts can be plugged in together */
+static const char *pad_var(ULONG id)
+{
+    static char name[40];
+    if (!id) return VAR_PAD;
+    sprintf(name, VAR_PAD ".%04lX-%04lX", (unsigned long)(id >> 16), (unsigned long)(id & 0xffff));
+    return name;
+}
+
+/* a pad turned up: show the buttons kept for its kind */
+static void pad_seen(ULONG id)
+{
+    if (id == padid || learn >= 0) return;
+    padid = id;
+    if (GetVar((STRPTR)pad_var(id), (STRPTR)padset, sizeof(padset), GVF_GLOBAL_ONLY) <= 0
+        && GetVar((STRPTR)VAR_PAD, (STRPTR)padset, sizeof(padset), GVF_GLOBAL_ONLY) <= 0)
+        padset[0] = 0;
+    strcpy(padset_was, padset);
+    show_padset();
+}
+
 static void show_padset(void)
 {
     if (padset[0]) sprintf(padsettext, "Learned: %s", padset);
@@ -288,7 +313,7 @@ static void learn_finish(void)
 
 static void poll_pad(void)
 {
-    ULONG out[3];
+    ULONG out[4];
     char t[120], w[100];
     int r = ask(ZZP_MSG_PAD, 0, NULL, 0, out);
     if (r != 0) {
@@ -296,6 +321,7 @@ static void poll_pad(void)
         settext(gPadNow, padnowtext, r == -2 ? "-" : "No game pad plugged in");
         return;
     }
+    if (out[3]) pad_seen(out[3]);
     if (learn >= 0) {
         if (!out[0]) { learn_wait = 0; return; }
         if (learn_wait) return;                 /* still held from the last step */
@@ -368,8 +394,11 @@ static int apply(int save)
         sprintf(v, "0x%08lX", (unsigned long)d);
         ok &= SetVar((STRPTR)VAR_DOSTYPE, (STRPTR)v, -1, fl) != 0;
     }
-    if (padset[0]) ok &= SetVar((STRPTR)VAR_PAD, (STRPTR)padset, -1, fl) != 0;
-    else { DeleteVar((STRPTR)VAR_PAD, GVF_GLOBAL_ONLY); if (save) DeleteVar((STRPTR)VAR_PAD, GVF_GLOBAL_ONLY | GVF_SAVE_VAR); }
+    if (padset[0]) ok &= SetVar((STRPTR)pad_var(padid), (STRPTR)padset, -1, fl) != 0;
+    else {
+        DeleteVar((STRPTR)pad_var(padid), GVF_GLOBAL_ONLY);
+        if (save) DeleteVar((STRPTR)pad_var(padid), GVF_GLOBAL_ONLY | GVF_SAVE_VAR);
+    }
     if (strcmp(padset, padset_was)) ask(ZZP_MSG_RESCAN, 0, NULL, 0, NULL);   /* pads read their buttons when found */
     return ok;
 }

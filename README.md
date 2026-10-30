@@ -82,7 +82,8 @@ Save keeps the settings, Use keeps them until the next reboot.
 | Variable | Meaning |
 |---|---|
 | `ZZPlug.dostype` | The DosType FAT sticks mount with: `0x4D534400` CrossDOS (the default), `0x46415400` fat95. |
-| `ZZPlug.padbuttons` | Which of the pad's buttons does what, as the pad numbers them: red, blue, green, yellow, reverse, forward, then the rest (`0` leaves one as it is). Read when a pad is plugged in. |
+| `ZZPlug.padbuttons.VVVV-PPPP` | Which of the pad's buttons does what, for one kind of pad (its USB vendor and product ID, e.g. `ZZPlug.padbuttons.0079-0006`): the pad's button numbers for red, blue, green, yellow, reverse, forward, then the rest (`0` leaves one as it is). Read when a pad is plugged in; ZZPlugPrefs' Learn saves it for the pad that is plugged in. |
+| `ZZPlug.padbuttons` | The same for every pad that has no setting of its own. |
 
 ## Known limits
 

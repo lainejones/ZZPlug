@@ -327,12 +327,15 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
                         desc, sizeof(desc), &got) != XS_OK || !zzp_padmap_parse(&d->pm, desc, (int)got))
             return;
         d->pmraw = d->pm;
-        {   /* the button layout: ENV:ZZPlug.padbuttons ("3 2 1 4 ..." = HID buttons for red, blue, green,
-             * yellow, reverse, forward, ...), else a known pad's, else as the pad numbers them */
+        {   /* the button layout: ENV:ZZPlug.padbuttons.VVVV-PPPP for this kind of pad, else
+             * ENV:ZZPlug.padbuttons ("3 2 1 4 ..." = HID buttons for red, blue, green, yellow,
+             * reverse, forward, ...), else a known pad's, else as the pad numbers them */
             uint8_t order[PAD_MAXBUTTONS];
-            char v[64];
+            char v[64], name[40];
             int n = 0;
-            if (GetVar((STRPTR)"ZZPlug.padbuttons", (STRPTR)v, sizeof(v), 0) > 0) {
+            sprintf(name, "ZZPlug.padbuttons.%04X-%04X", (unsigned)u->vid, (unsigned)u->pid);
+            if (GetVar((STRPTR)name, (STRPTR)v, sizeof(v), 0) > 0
+                || GetVar((STRPTR)"ZZPlug.padbuttons", (STRPTR)v, sizeof(v), 0) > 0) {
                 char *p = v;
                 while (*p && n < PAD_MAXBUTTONS) {
                     while (*p == ' ' || *p == ',') p++;
@@ -623,6 +626,8 @@ static int answer(struct zzp_msg *m)
                 m->out[0] = raw;
                 m->out[1] = D[k].state;
                 m->out[2] = (ULONG)D[k].pmraw.nbuttons;
+                if (m->m.mn_Length >= sizeof(struct zzp_msg))   /* an older ZZPlugPrefs has no out[3] */
+                    m->out[3] = ((ULONG)B.dev[D[k].dev].vid << 16) | B.dev[D[k].dev].pid;
                 m->rc = 0;
                 break;
             }
