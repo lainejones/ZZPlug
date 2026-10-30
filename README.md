@@ -73,9 +73,16 @@ ZZPlug RESET             one root-port reset and its diagnostic record (ZZPlug s
 
 **ZZPlugPrefs** shows what is plugged in and what ZZPlug does with each
 device, kept current while it is open; click one for its details. It also
-starts and stops ZZPlug, chooses the filesystem for FAT sticks, shows the game
-pad live, and learns a pad's buttons: press Learn, then each button as it asks.
-Save keeps the settings, Use keeps them until the next reboot.
+starts and stops ZZPlug, chooses the filesystem for FAT sticks and shows the
+game pad live. Save keeps the settings, Use keeps them until the next reboot.
+
+**Buttons...** opens the game pad window: every pad plugged in, and which of
+its buttons plays each Amiga button. Press **Set** on a row, then the pad's
+button; **Learn all** goes through the seven in turn, **Built-in** goes back to
+ZZPlug's own layout. A light shows each row while its button is held. Each
+kind of pad keeps its own layout.
+
+![The game pad window with an N64-style pad: A is fire](docs/gamepad-window.png)
 
 ### Settings (ENV:, saved to ENVARC: by ZZPlugPrefs)
 
