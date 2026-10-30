@@ -59,7 +59,7 @@ static const char about_text[] =
 #define DOSTYPE_FAT95    0x46415400UL           /* "FAT\0" */
 
 enum { G_STATE = 1, G_START, G_STOP, G_DEVS, G_DETAIL, G_FAT, G_PADSET, G_PADWIN, G_PADNOW, G_RECTEXT, G_RECORD, G_MSG,
-       G_SAVE, G_USE, G_CANCEL };
+       G_SAVE, G_USE, G_CANCEL, G_DEVSH, G_DETAILH };
 
 #define MAXLINES 40
 #define LINELEN  120
@@ -69,12 +69,16 @@ struct lines {
     struct Node node[MAXLINES];
     char text[MAXLINES][LINELEN];
     int n;
+    int widest;                                 /* the longest line, in characters */
+    int off;                                    /* scrolled this many characters to the right */
 };
 
 static struct Screen *scr;
 static APTR vi;
 static struct Window *win;
 static struct Gadget *glist, *gState, *gStart, *gStop, *gDevs, *gDetail, *gFat, *gPadSet, *gPadNow, *gMsg;
+static struct Gadget *gDevsH, *gDetailH;        /* the left/right scrollers under the two lists */
+static int devsvis = 20, detailvis = 20;        /* characters each list shows across */
 static struct TextAttr topaz8 = { (STRPTR)"topaz.font", 8, 0, 0 };
 static struct TextAttr *font;
 
@@ -226,6 +230,14 @@ static void lines_init(struct lines *l)
     l->list.lh_Tail = NULL;
     l->list.lh_TailPred = (struct Node *)&l->list.lh_Head;
     l->n = 0;
+    l->widest = 0;
+}
+
+/* where a line starts showing, scrolled l->off characters */
+static char *lines_from(struct lines *l, int i)
+{
+    int len = strlen(l->text[i]);
+    return l->text[i] + (l->off < len ? l->off : len);
 }
 
 static void lines_add(struct lines *l, const char *s)
@@ -236,9 +248,31 @@ static void lines_add(struct lines *l, const char *s)
     l->text[l->n][LINELEN - 1] = 0;
     nd = &l->node[l->n];
     memset(nd, 0, sizeof(*nd));
-    nd->ln_Name = l->text[l->n];
+    if ((int)strlen(l->text[l->n]) > l->widest) l->widest = strlen(l->text[l->n]);
+    nd->ln_Name = lines_from(l, l->n);
     AddTail(&l->list, nd);
     l->n++;
+}
+
+/* the scroller under a list: as wide as its longest line (call with the
+ * labels attached again) */
+static void lines_scroller(struct lines *l, struct Gadget *sc, int vis)
+{
+    if (l->off > l->widest - vis) l->off = l->widest - vis > 0 ? l->widest - vis : 0;
+    if (sc) GT_SetGadgetAttrs(sc, win, NULL, GTSC_Total, (ULONG)(l->widest > vis ? l->widest : vis),
+                              GTSC_Visible, (ULONG)vis, GTSC_Top, (ULONG)l->off, TAG_END);
+}
+
+/* scroll a list left or right to column off */
+static void lines_shift(struct lines *l, struct Gadget *lv, int off)
+{
+    int i;
+    if (off == l->off) return;
+    if (lv) GT_SetGadgetAttrs(lv, win, NULL, GTLV_Labels, ~0UL, TAG_END);
+    l->off = off;
+    for (i = 0; i < l->n; i++)
+        l->node[i].ln_Name = lines_from(l, i);
+    if (lv) GT_SetGadgetAttrs(lv, win, NULL, GTLV_Labels, (ULONG)&l->list, TAG_END);
 }
 
 /* ------------------------------------------------------------------ */
@@ -253,6 +287,7 @@ static void show_detail(int force)
     strcpy(lastdetail, buf);
     if (gDetail) GT_SetGadgetAttrs(gDetail, win, NULL, GTLV_Labels, ~0UL, TAG_END);
     lines_init(&detail);
+    detail.off = 0;
     for (p = buf; *p; p = e) {
         e = strchr(p, '\n');
         if (!e) e = p + strlen(p);
@@ -261,6 +296,7 @@ static void show_detail(int force)
         if (*e) e++;
     }
     if (gDetail) GT_SetGadgetAttrs(gDetail, win, NULL, GTLV_Labels, (ULONG)&detail.list, TAG_END);
+    lines_scroller(&detail, gDetailH, detailvis);
 }
 
 static void refresh_state(void)
@@ -307,6 +343,7 @@ static void refresh_list(int force)
         if (devidx[devs.n] == seldev && seldev >= 0) newsel = devs.n;
         lines_add(&devs, t);
     }
+    if (devs.off > devs.widest) devs.off = 0;
     if (newsel < 0) {                           /* the device picked before is gone: pick the first one */
         for (i = 0; i < devs.n && devidx[i] < 0; i++) ;
         newsel = i < devs.n ? i : -1;
@@ -315,6 +352,7 @@ static void refresh_list(int force)
     seldev = newsel >= 0 ? devidx[newsel] : -1;
     if (gDevs) GT_SetGadgetAttrs(gDevs, win, NULL, GTLV_Labels, (ULONG)&devs.list,
                                  GTLV_Selected, (ULONG)(selected >= 0 ? selected : ~0UL), TAG_END);
+    lines_scroller(&devs, gDevsH, devsvis);
     show_detail(1);
 }
 
@@ -1078,17 +1116,17 @@ static int make_gadgets(int *pw, int *ph, int compact)
     int fh = font->ta_YSize, gh = fh + (compact ? 4 : 6), row = gh + (compact ? 2 : 4);
     int cw = tlen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJ") / 36 + 1;
     int bl = scr->WBorLeft + 6, bt = title_h() + (compact ? 3 : 6);
-    int iw = cw * 70, lw, lvh, y, labw, bw, x, lines = 9;
+    int iw = cw * 56, lw, lvh, y, labw, bw, x, lines = 9, sh = fh + 3;
 
     /* a classic window's width whatever the screen: on a wide RTG Workbench
      * (1600x600 over two monitors) 84 characters filled a monitor */
-    if (iw < 540) iw = 540;
+    if (iw < 440) iw = 440;                     /* the lists scroll left/right for long lines */
     if (iw > 600) iw = 600;
     if (iw > scr->Width - bl - 6 - scr->WBorRight) iw = scr->Width - bl - 6 - scr->WBorRight;
     lw = iw * 52 / 100;
     labw = tlen("FAT sticks use") + 12;          /* the widest label on the left */
     if (compact) {                              /* everything but the lists, then lines to fill the rest */
-        int fixed = bt + row + (fh + 2) + 4 + 5 * row + gh + 3 + scr->WBorBottom;
+        int fixed = bt + row + (fh + 2) + sh + 4 + 5 * row + gh + 3 + scr->WBorBottom;
         int room = scr->Height - scr->BarHeight - 1 - fixed;
         lines = (room - 4) / (fh + 1);
         if (lines > 9) lines = 9;
@@ -1121,7 +1159,20 @@ static int make_gadgets(int *pw, int *ph, int compact)
     ng.ng_LeftEdge = bl + lw + 8; ng.ng_Width = iw - lw - 8;
     ng.ng_GadgetText = (STRPTR)"Details"; ng.ng_GadgetID = G_DETAIL;
     g = gDetail = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels, (ULONG)&detail.list, GTLV_ReadOnly, TRUE, TAG_END);
-    y += lvh + (compact ? 4 : 8);
+    /* GadTools lists only scroll up and down: these shift the text left and right */
+    devsvis = (lw - 24) / cw;
+    detailvis = (iw - lw - 8 - 24) / cw;
+    y += lvh;
+    ng.ng_LeftEdge = bl; ng.ng_TopEdge = y; ng.ng_Width = lw; ng.ng_Height = sh;
+    ng.ng_GadgetText = NULL; ng.ng_Flags = 0; ng.ng_GadgetID = G_DEVSH;
+    g = gDevsH = CreateGadget(SCROLLER_KIND, g, &ng, GTSC_Total, (ULONG)(devs.widest > devsvis ? devs.widest : devsvis),
+                              GTSC_Visible, (ULONG)devsvis, GTSC_Top, (ULONG)devs.off, GTSC_Arrows, 16UL,
+                              PGA_Freedom, LORIENT_HORIZ, GA_RelVerify, TRUE, TAG_END);
+    ng.ng_LeftEdge = bl + lw + 8; ng.ng_Width = iw - lw - 8; ng.ng_GadgetID = G_DETAILH;
+    g = gDetailH = CreateGadget(SCROLLER_KIND, g, &ng, GTSC_Total, (ULONG)(detail.widest > detailvis ? detail.widest : detailvis),
+                                GTSC_Visible, (ULONG)detailvis, GTSC_Top, (ULONG)detail.off, GTSC_Arrows, 16UL,
+                                PGA_Freedom, LORIENT_HORIZ, GA_RelVerify, TRUE, TAG_END);
+    y += sh + (compact ? 4 : 8);
 
     /* settings */
     ng.ng_Flags = PLACETEXT_LEFT;
@@ -1264,7 +1315,7 @@ int main(void)
         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE, WA_Activate, TRUE,
         WA_SimpleRefresh, TRUE, WA_NewLookMenus, TRUE,
         WA_IDCMP, (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY | IDCMP_MENUPICK |
-                          BUTTONIDCMP | LISTVIEWIDCMP | CYCLEIDCMP),
+                          BUTTONIDCMP | LISTVIEWIDCMP | CYCLEIDCMP | SCROLLERIDCMP | ARROWIDCMP),
         WA_Gadgets, (ULONG)glist,
         WA_PubScreen, (ULONG)scr,
         TAG_END);
@@ -1324,8 +1375,10 @@ int main(void)
                     }
                 }
                 break;
-            case IDCMP_GADGETUP:
-                done = main_action(gad->GadgetID, code, tport, treq);
+            case IDCMP_GADGETDOWN: case IDCMP_MOUSEMOVE: case IDCMP_GADGETUP:
+                if (gad && gad->GadgetID == G_DEVSH) lines_shift(&devs, gDevs, code);
+                else if (gad && gad->GadgetID == G_DETAILH) lines_shift(&detail, gDetail, code);
+                else if (cls == IDCMP_GADGETUP) done = main_action(gad->GadgetID, code, tport, treq);
                 break;
             }
         }
