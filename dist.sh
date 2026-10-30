@@ -31,7 +31,7 @@ I=icons
 cp $I/Install_ZZPlug.info $I/README.info $D/
 cp $I/ZZPlugPrefs.info  $D/Prefs/
 cp $I/ZZPlug.info       dist/ZZPlug.info
-for dr in C Prefs Tools; do cp $I/$dr.info $D/$dr.info; done
+
 
 echo "ZZPlug $VER:"
 find dist -type f | sort

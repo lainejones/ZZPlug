@@ -119,6 +119,7 @@
 (copyfiles (source "README") (dest toolsdir) (nogauge) (infos))
 (copyfiles (source "LICENSE") (dest toolsdir) (nogauge))
 (textfile (dest "ENVARC:ZZPlug.toolsdir") (append toolsdir))
+(textfile (dest "ENV:ZZPlug.toolsdir") (append toolsdir))     ; for a second run before a reboot
 (complete 75)
 
 ; ---- the boot line ---------------------------------------------------------
@@ -128,6 +129,15 @@
              (help @startup-help)
              (command "Run >NIL: C:ZZPlug START QUIET")))
 (complete 90)
+
+; the package drawer came with a plain drawer icon so it shows when unpacked;
+; from now on it has this Workbench's own (ENV:Sys/def_drawer.info). Not on
+; the install floppy: a disk root has no drawer icon, and it may be locked.
+(set pkgdir (expandpath ""))
+(if (and (exists "ENV:Sys/def_drawer.info" (noreq))
+         (<> (substr pkgdir (- (strlen pkgdir) 1) 1) ":"))
+    (if (exists (cat pkgdir ".info") (noreq))
+        (run (cat "Copy >NIL: ENV:Sys/def_drawer.info \"" pkgdir ".info\""))))
 
 ; start it now
 (run "Run >NIL: C:ZZPlug START QUIET")
