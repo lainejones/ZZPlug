@@ -1078,9 +1078,12 @@ static int make_gadgets(int *pw, int *ph, int compact)
     int fh = font->ta_YSize, gh = fh + (compact ? 4 : 6), row = gh + (compact ? 2 : 4);
     int cw = tlen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJ") / 36 + 1;
     int bl = scr->WBorLeft + 6, bt = title_h() + (compact ? 3 : 6);
-    int iw = cw * 84, lw, lvh, y, labw, bw, x, lines = 9;
+    int iw = cw * 70, lw, lvh, y, labw, bw, x, lines = 9;
 
-    if (iw < 560) iw = 560;
+    /* a classic window's width whatever the screen: on a wide RTG Workbench
+     * (1600x600 over two monitors) 84 characters filled a monitor */
+    if (iw < 540) iw = 540;
+    if (iw > 600) iw = 600;
     if (iw > scr->Width - bl - 6 - scr->WBorRight) iw = scr->Width - bl - 6 - scr->WBorRight;
     lw = iw * 52 / 100;
     labw = tlen("Game pad now") + 12;
