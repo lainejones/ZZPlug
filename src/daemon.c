@@ -339,6 +339,7 @@ static void add_drv(int di, int kind, const struct zzp_if *f)
                 char *p = v;
                 while (*p && n < PAD_MAXBUTTONS) {
                     while (*p == ' ' || *p == ',') p++;
+                    if (*p == '-') { order[n++] = PAD_NONE; p++; continue; }   /* no button in this place */
                     if (*p < '0' || *p > '9') break;
                     order[n] = 0;
                     while (*p >= '0' && *p <= '9') order[n] = (uint8_t)(order[n] * 10 + (*p++ - '0'));
@@ -620,14 +621,28 @@ static int answer(struct zzp_msg *m)
     case ZZP_MSG_PAD:
         m->rc = -1;
         for (k = 0; k < ND; k++)
-            if (D[k].kind == DRV_PAD && D[k].slot == 0) {
+            if (D[k].kind == DRV_PAD && D[k].slot == m->arg) {
+                struct zzp_dev *u = &B.dev[D[k].dev];
                 uint16_t raw = 0;
                 if (D[k].lastlen) zzp_pad_state(&D[k].pmraw, D[k].lastrep, D[k].lastlen, &raw);
                 m->out[0] = raw;
                 m->out[1] = D[k].state;
                 m->out[2] = (ULONG)D[k].pmraw.nbuttons;
                 if (m->m.mn_Length >= sizeof(struct zzp_msg))   /* an older ZZPlugPrefs has no out[3] */
-                    m->out[3] = ((ULONG)B.dev[D[k].dev].vid << 16) | B.dev[D[k].dev].pid;
+                    m->out[3] = ((ULONG)u->vid << 16) | u->pid;
+                if (b.p) {
+                    struct zzp_padmap bi = D[k].pmraw;
+                    uint8_t pos[PAD_MAXBUTTONS], order[PAD_MAXBUTTONS];
+                    int i, n = zzp_padmap_order_for(u->vid, u->pid, order);
+                    bput(&b, "%s\nport %d\n", u->product[0] ? u->product : "Game pad", joy_port_of(D[k].slot) + 1);
+                    zzp_padmap_layout(&D[k].pm, &D[k].pmraw, pos);
+                    for (i = 0; i < PAD_MAXBUTTONS; i++) bput(&b, i ? " %d" : "%d", pos[i]);
+                    if (n) zzp_padmap_reorder(&bi, order, n);
+                    zzp_padmap_layout(&bi, &D[k].pmraw, pos);
+                    bput(&b, "\n");
+                    for (i = 0; i < PAD_MAXBUTTONS; i++) bput(&b, i ? " %d" : "%d", pos[i]);
+                    bput(&b, "\n");
+                }
                 m->rc = 0;
                 break;
             }

@@ -119,8 +119,25 @@ int zzp_padmap_reorder(struct zzp_padmap *m, const uint8_t *order, int n)
         if (order[i] >= 1 && order[i] <= PAD_MAXBUTTONS) {
             m->button[i] = old[order[i] - 1];
             done++;
+        } else if (order[i] == PAD_NONE) {
+            memset(&m->button[i], 0, sizeof(m->button[i]));
+            done++;
         }
     return done;
+}
+
+void zzp_padmap_layout(const struct zzp_padmap *m, const struct zzp_padmap *raw, uint8_t *pos)
+{
+    int i, j;
+    for (i = 0; i < PAD_MAXBUTTONS; i++) {
+        const struct zzp_field *f = &m->button[i];
+        pos[i] = 0;
+        if (!f->present) continue;
+        for (j = 0; j < PAD_MAXBUTTONS; j++) {
+            const struct zzp_field *r = &raw->button[j];
+            if (r->present && r->bit == f->bit && r->report_id == f->report_id) { pos[i] = (uint8_t)(j + 1); break; }
+        }
+    }
 }
 
 int zzp_padmap_order_for(uint16_t vid, uint16_t pid, uint8_t *order)

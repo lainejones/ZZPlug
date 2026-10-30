@@ -40,9 +40,13 @@ struct zzp_padmap {
 
 int  zzp_padmap_parse(struct zzp_padmap *m, const uint8_t *desc, int len);   /* 1 = looks like a pad/joystick */
 /* which HID button plays which part: order[0] = the button for red (fire), then blue, green, yellow,
- * reverse, forward, ... (1-based HID button numbers, 0 = leave). Returns the number applied. */
+ * reverse, forward, ... (1-based HID button numbers, 0 = leave, PAD_NONE = no button there).
+ * Returns the number applied. */
+#define PAD_NONE 0xff
 int  zzp_padmap_reorder(struct zzp_padmap *m, const uint8_t *order, int n);
 int  zzp_padmap_order_for(uint16_t vid, uint16_t pid, uint8_t *order);  /* a known pad's layout: n, 0 = none */
+/* the other way round: which of raw's buttons is in each of m's places (1-based, 0 = none) */
+void zzp_padmap_layout(const struct zzp_padmap *m, const struct zzp_padmap *raw, uint8_t *pos);
 uint32_t zzp_pad_state(const struct zzp_padmap *m, const uint8_t *r, int len, uint16_t *buttons_out);
 
 #endif

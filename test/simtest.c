@@ -283,6 +283,17 @@ int main(void)
             s = zzp_pad_state(&pm, leftup_a, 8, &bt);       /* HID button 1 = B, on the left */
             CHECK((s & (PAD_BLUE | PAD_RED)) == PAD_BLUE, "after reordering, its left B button is blue and right A is fire");
             CHECK(zzp_padmap_order_for(0x0079, 0x0006, order) == 0, "the shared 0079:0006 chip keeps the pad's own order");
+            {   /* the game pad window's layouts: "-" (PAD_NONE) empties a place; a layout reads back */
+                struct zzp_padmap raw;
+                uint8_t pos[PAD_MAXBUTTONS], o2[3] = { 2, PAD_NONE, 1 };
+                zzp_padmap_parse(&pm, d1, sizeof(d1));
+                raw = pm;
+                CHECK(zzp_padmap_reorder(&pm, o2, 3) == 3, "a layout with an empty place applies");
+                zzp_padmap_layout(&pm, &raw, pos);
+                CHECK(pos[0] == 2 && pos[1] == 0 && pos[2] == 1 && pos[3] == 4, "it reads back as 2, none, 1, then as the pad numbers them");
+                s = zzp_pad_state(&pm, leftup_a, 8, &bt);   /* HID button 1 held: now green, not red or blue */
+                CHECK((s & (PAD_RED | PAD_BLUE | PAD_GREEN)) == PAD_GREEN, "button 1 moved to green; blue has no button");
+            }
         }
     }
 
