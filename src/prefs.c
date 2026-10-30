@@ -1147,7 +1147,14 @@ static int make_gadgets(int *pw, int *ph, int compact)
     ng.ng_Flags = PLACETEXT_LEFT;
     ng.ng_LeftEdge = x; ng.ng_TopEdge = y; ng.ng_Width = iw - labw - bw - 8;
     ng.ng_GadgetText = (STRPTR)"Not working?"; ng.ng_GadgetID = G_RECTEXT;
-    g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)"Record what a device sends, for a bug report", TAG_END);
+    {   /* the longest wording that fits beside the button (a TEXT_KIND draws on past its edge) */
+        static const char *const say[] = {"Record what a device sends, for a bug report",
+                                          "Record what a device sends", "Record it"};
+        int k = 0;
+        while (k < 2 && tlen(say[k]) + 8 > ng.ng_Width)
+            k++;
+        g = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)say[k], GTTX_Clipped, TRUE, TAG_END);
+    }
     ng.ng_Flags = 0;
     ng.ng_LeftEdge = bl + iw - bw; ng.ng_Width = bw; ng.ng_GadgetText = (STRPTR)"Record a device..."; ng.ng_GadgetID = G_RECORD;
     g = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
