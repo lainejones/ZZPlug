@@ -126,8 +126,8 @@ Shell). A window says what to do: press each button, move each stick or
 wheel, one at a time, for 30 seconds. The recording is saved as
 `RAM:ZZPlug-dump.txt`.
 
-[Open an issue](https://github.com/lainejones/ZZPlug/issues), attach the file,
-and say what the device is and what you pressed in which order.
+[Open a device report](https://github.com/lainejones/ZZPlug/issues/new?template=device-report.yml):
+the form asks for the device, what you pressed in which order, and the file.
 
 The file holds every device's descriptors (device, configuration and HID
 report descriptors) and each report that changed while recording, from the

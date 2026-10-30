@@ -1,0 +1,53 @@
+name: A device that doesn't work
+description: A USB device ZZPlug doesn't drive yet, or doesn't drive right - with a recording of what it sends.
+title: "Device: "
+labels: ["device"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping ZZPlug learn a new device! A recording lets us write a driver for it
+        without having one here.
+
+        **Make the recording on the Amiga:** plug the device in, open **ZZPlugPrefs** and press
+        **Record a device...** (or run `ZZPlug DUMP` in a Shell). Follow the steps in the window:
+        press each button and move each stick or wheel, one at a time. The recording is saved as
+        `RAM:ZZPlug-dump.txt`; copy it somewhere you can reach from the browser.
+  - type: input
+    id: device
+    attributes:
+      label: What is the device?
+      description: Make and model, and what kind of thing it is (game pad, keyboard, serial adapter...).
+      placeholder: e.g. "8BitDo SN30 Pro, game pad (USB cable)"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens?
+      description: What should it do on the Amiga, and what does it do now (nothing at all, wrong buttons, ...)?
+    validations:
+      required: true
+  - type: textarea
+    id: order
+    attributes:
+      label: What you pressed or moved while recording, in order
+      description: It helps us match the recording to the buttons.
+      placeholder: |
+        A, B, X, Y, left shoulder, right shoulder, select, start,
+        D-pad up, down, left, right, left stick all round
+    validations:
+      required: true
+  - type: textarea
+    id: recording
+    attributes:
+      label: The recording
+      description: Drag `ZZPlug-dump.txt` into this box to attach it.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Your Amiga
+      description: Model, AmigaOS version, ZZ9000 firmware version, and the USB hub in between.
+      placeholder: e.g. "A4000, OS 3.2.3, firmware 2.9.1, powered USB 2.0 hub"
