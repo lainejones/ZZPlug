@@ -1086,7 +1086,7 @@ static int make_gadgets(int *pw, int *ph, int compact)
     if (iw > 600) iw = 600;
     if (iw > scr->Width - bl - 6 - scr->WBorRight) iw = scr->Width - bl - 6 - scr->WBorRight;
     lw = iw * 52 / 100;
-    labw = tlen("Game pad now") + 12;
+    labw = tlen("FAT sticks use") + 12;          /* the widest label on the left */
     if (compact) {                              /* everything but the lists, then lines to fill the rest */
         int fixed = bt + row + (fh + 2) + 4 + 5 * row + gh + 3 + scr->WBorBottom;
         int room = scr->Height - scr->BarHeight - 1 - fixed;
