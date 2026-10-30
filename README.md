@@ -89,6 +89,14 @@ device, kept current while it is open; click one for its details. It also
 starts and stops ZZPlug, chooses the filesystem for FAT sticks and shows the
 game pad live. Save keeps the settings, Use keeps them until the next reboot.
 
+Both windows have the usual prefs-editor menus (right mouse button):
+**Project** - About, Save (Amiga-S), Use (Amiga-U), Quit (Amiga-Q, the same
+as Cancel); **Edit** - Reset to defaults (Amiga-D), Last saved (Amiga-L),
+Restore (Amiga-R, the settings as they were when the window opened). The
+main window's **ZZPlug** menu starts and stops ZZPlug, opens the game pad
+window (Amiga-B) and records a device. On a 640x200 screen the windows use a
+tighter layout so they fit.
+
 **Buttons...** opens the game pad window: every pad plugged in, and which of
 its buttons plays each Amiga button. Press **Set** on a row, then the pad's
 button; **Learn all** goes through the seven in turn, **Built-in** goes back to

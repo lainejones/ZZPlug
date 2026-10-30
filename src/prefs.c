@@ -13,6 +13,9 @@
  *  - Record a device: runs ZZPlug DUMP in a window of its own, for a device
  *    ZZPlug does not know yet (the file goes with a bug report)
  *  - Save (ENVARC: too) / Use (ENV: only) / Cancel, as Amiga prefs editors do
+ *  - menus as the system's prefs editors have them: Project (About, Save,
+ *    Use, Quit), Edit (Reset to defaults, Last saved, Restore), ZZPlug
+ *  - a compact layout when the normal one does not fit (640x200, Topaz 8)
  *
  * It asks ZZPlug through its public port (zzpmsg.h); nothing here touches
  * the USB hardware.
@@ -39,8 +42,15 @@
 #include <proto/graphics.h>
 #include <proto/gadtools.h>
 #include "zzpmsg.h"
+#include "amigui.h"
 
-static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs 0.8 (29.10.2026)";
+#define PREFS_VERSION "0.8"
+static const char ver[] __attribute__((used)) = "$VER: ZZPlugPrefs " PREFS_VERSION " (29.10.2026)";
+static const char about_text[] =
+    "The prefs editor of ZZPlug, a small USB stack\n"
+    "for the ZZ9000: what is plugged in, Start/Stop,\n"
+    "FAT sticks and the game pads' buttons.\n\n"
+    "GPL-3.0-or-later";
 
 #define PORTNAME "ZZPlug"
 #define VAR_DOSTYPE "ZZPlug.dostype"
@@ -76,6 +86,83 @@ static char lastlist[4096], lastdetail[2048];
 static int running = -1;
 
 static struct MsgPort *reply;
+
+/* ---- the menus: Project / Edit as the system's prefs editors have them ---- */
+
+enum { MN_ABOUT = 1, MN_SAVE, MN_USE, MN_QUIT, MN_DEFAULTS, MN_LASTSAVED, MN_RESTORE,
+       MN_START, MN_STOP, MN_PADS, MN_RECORD };
+
+static struct NewMenu main_menu_def[] = {
+    { NM_TITLE, (STRPTR)"Project", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"About...", NULL, 0, 0, (APTR)MN_ABOUT },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Save", (STRPTR)"S", 0, 0, (APTR)MN_SAVE },
+    { NM_ITEM, (STRPTR)"Use", (STRPTR)"U", 0, 0, (APTR)MN_USE },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Quit", (STRPTR)"Q", 0, 0, (APTR)MN_QUIT },
+    { NM_TITLE, (STRPTR)"Edit", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Reset to defaults", (STRPTR)"D", 0, 0, (APTR)MN_DEFAULTS },
+    { NM_ITEM, (STRPTR)"Last saved", (STRPTR)"L", 0, 0, (APTR)MN_LASTSAVED },
+    { NM_ITEM, (STRPTR)"Restore", (STRPTR)"R", 0, 0, (APTR)MN_RESTORE },
+    { NM_TITLE, (STRPTR)"ZZPlug", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Start ZZPlug", NULL, 0, 0, (APTR)MN_START },
+    { NM_ITEM, (STRPTR)"Stop ZZPlug", NULL, 0, 0, (APTR)MN_STOP },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Game pad buttons...", (STRPTR)"B", 0, 0, (APTR)MN_PADS },
+    { NM_ITEM, (STRPTR)"Record a device...", NULL, 0, 0, (APTR)MN_RECORD },
+    { NM_END, NULL, NULL, 0, 0, NULL } };
+
+/* the game pad window's own: Edit works on the pad shown */
+static struct NewMenu pad_menu_def[] = {
+    { NM_TITLE, (STRPTR)"Project", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"About...", NULL, 0, 0, (APTR)MN_ABOUT },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Save", (STRPTR)"S", 0, 0, (APTR)MN_SAVE },
+    { NM_ITEM, (STRPTR)"Use", (STRPTR)"U", 0, 0, (APTR)MN_USE },
+    { NM_ITEM, NM_BARLABEL, NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Close (Cancel)", (STRPTR)"Q", 0, 0, (APTR)MN_QUIT },
+    { NM_TITLE, (STRPTR)"Edit", NULL, 0, 0, NULL },
+    { NM_ITEM, (STRPTR)"Reset to defaults", (STRPTR)"D", 0, 0, (APTR)MN_DEFAULTS },
+    { NM_ITEM, (STRPTR)"Last saved", (STRPTR)"L", 0, 0, (APTR)MN_LASTSAVED },
+    { NM_ITEM, (STRPTR)"Restore", (STRPTR)"R", 0, 0, (APTR)MN_RESTORE },
+    { NM_END, NULL, NULL, 0, 0, NULL } };
+
+static struct Menu *main_menu, *pad_menu;
+
+static struct Menu *make_menu(struct NewMenu *def)
+{
+    struct Menu *m = CreateMenus(def, TAG_END);
+    if (m && !LayoutMenus(m, vi, GTMN_NewLookMenus, TRUE, TAG_END)) { FreeMenus(m); m = NULL; }
+    return m;
+}
+
+static void about(struct Window *w)
+{
+    amg_about(w, "ZZPlugPrefs", PREFS_VERSION, about_text);
+}
+
+/* the text of ENVARC:<name> (what Save left), 0 = none */
+static int read_envarc(const char *name, char *buf, LONG size)
+{
+    char path[80];
+    BPTR fh;
+    LONG n;
+    strcpy(path, "ENVARC:");
+    strncat(path, name, sizeof(path) - 8);
+    if (!(fh = Open((STRPTR)path, MODE_OLDFILE))) return 0;
+    n = Read(fh, buf, size - 1);
+    Close(fh);
+    if (n < 0) n = 0;
+    buf[n] = 0;
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' ')) buf[--n] = 0;
+    return n > 0;
+}
+
+/* the title bar's height on this screen (the screen's font, not the gadgets') */
+static int title_h(void)
+{
+    return scr->WBorTop + scr->Font->ta_YSize + 1;
+}
 
 /* the settings as edited */
 static ULONG dostype;                           /* 0 = ZZPlug's default (CrossDOS) */
@@ -331,7 +418,7 @@ static struct Gadget *pglist, *pgPad, *pgField[NROWS], *pgSet[NROWS], *pgNow, *p
 static char pfield[NROWS][40], pnow[120], pinfo[120];
 static char padlabel[MAXPADS][90];
 static STRPTR padlabels[MAXPADS + 1];
-static int lamp_x, lamp_w, row_y[NROWS], row_h, sw_x;
+static int lamp_x, lamp_w, row_y[NROWS], row_h, sw_x, head_y;
 static int lamp_lit[NROWS];
 static LONG pen_lit = -1, pen_off = -1, pen_sw[4] = { -1, -1, -1, -1 };
 static int setrow = -1, setwait, learnall;
@@ -573,17 +660,42 @@ static int pads_apply(int save)
     return ok;
 }
 
-static int make_padgadgets(int *pw, int *ph)
+/* Edit > Last saved: the buttons ENVARC: holds for this kind of pad (none
+ * there = the built-in ones). 0 = no pad. */
+static int pad_last_saved(struct pad *p)
+{
+    char v[96], *s = v;
+    int k;
+    if (!p->present) return 0;
+    if (!read_envarc(pad_var(p->id), v, sizeof(v))) {
+        memcpy(p->pos, p->builtin, NPLACES);
+        p->own = 0;
+    } else {
+        for (k = 0; k < NPLACES; k++) {
+            while (*s == ' ' || *s == '\t') s++;
+            if (*s == '-') { p->pos[k] = 0; s++; }
+            else if (*s >= '0' && *s <= '9') p->pos[k] = (UBYTE)strtol(s, &s, 10);
+            else p->pos[k] = 0;
+        }
+        p->own = 1;
+    }
+    p->changed = 1;
+    return 1;
+}
+
+static int make_padgadgets(int *pw, int *ph, int compact)
 {
     struct NewGadget ng;
     struct Gadget *g;
-    int fh = font->ta_YSize, gh = fh + 6, row = gh + 4;
-    int bl = scr->WBorLeft + 8, bt = scr->WBorTop + fh + 1 + 6;
+    int fh = font->ta_YSize, gh = fh + (compact ? 4 : 6), row = gh + (compact ? 2 : 4);
+    int gap = compact ? 2 : 6;
+    int bl = scr->WBorLeft + 8, bt = title_h() + (compact ? 3 : 6);
     int labw = tlen("Red (fire)") + 16 + fh + 8, setw = tlen("Set") + 24, iw, fw, y, r, bw;
     int cw = tlen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJ") / 36 + 1;
 
     iw = cw * 60;
     if (iw < 460) iw = 460;
+    if (iw > scr->Width - bl - 8 - scr->WBorRight) iw = scr->Width - bl - 8 - scr->WBorRight;
     lamp_w = tlen("Held") + 8;
     fw = iw - labw - setw - lamp_w - 16;
     row_h = gh;
@@ -598,7 +710,9 @@ static int make_padgadgets(int *pw, int *ph)
     ng.ng_GadgetText = (STRPTR)"Pad"; ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = P_PAD;
     g = pgPad = CreateGadget(CYCLE_KIND, g, &ng, GTCY_Labels, (ULONG)padlabels, GTCY_Active, (ULONG)curpad,
                              GA_Disabled, npads_now < 1, TAG_END);
-    y += row + fh + 6;                          /* room for the column heads */
+    y += row;
+    head_y = y + (compact ? 0 : 2);             /* the column heads */
+    y += fh + (compact ? 2 : 6);
 
     sw_x = bl;
     lamp_x = bl + iw - lamp_w;
@@ -612,7 +726,7 @@ static int make_padgadgets(int *pw, int *ph)
         g = pgSet[r] = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
         y += row;
     }
-    y += 6;
+    y += gap;
     ng.ng_LeftEdge = bl + tlen("Pad now") + 12; ng.ng_TopEdge = y; ng.ng_Width = iw - tlen("Pad now") - 12;
     ng.ng_GadgetText = (STRPTR)"Pad now"; ng.ng_Flags = PLACETEXT_LEFT; ng.ng_GadgetID = P_NOW;
     g = pgNow = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)pnow, GTTX_Border, TRUE, TAG_END);
@@ -625,7 +739,7 @@ static int make_padgadgets(int *pw, int *ph)
     g = CreateGadget(BUTTON_KIND, g, &ng, TAG_END);
     ng.ng_LeftEdge = bl + 2 * bw + 16; ng.ng_Width = iw - 2 * bw - 16; ng.ng_GadgetText = NULL; ng.ng_GadgetID = P_INFO;
     g = pgInfo = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)pinfo, TAG_END);
-    y += row + 6;
+    y += row + gap;
 
     bw = tlen("Cancel") + 32;
     if (bw < 90) bw = 90;
@@ -639,14 +753,14 @@ static int make_padgadgets(int *pw, int *ph)
     y += gh;
 
     *pw = bl + iw + 8 + scr->WBorRight;
-    *ph = y + 6 + scr->WBorBottom;
+    *ph = y + (compact ? 3 : 6) + scr->WBorBottom;
     return g != NULL;
 }
 
 static void pad_heads(void)
 {
     struct RastPort *rp = pwin->RPort;
-    int fh = font->ta_YSize, y = row_y[0] - fh - 4 + rp->TxBaseline;
+    int y = head_y + rp->TxBaseline;
     SetAPen(rp, 2);                             /* SHINEPEN on 3.x: the highlighted label look */
     Move(rp, sw_x, y); Text(rp, (STRPTR)"Amiga button", 12);
     Move(rp, pgField[0]->LeftEdge, y); Text(rp, (STRPTR)"Pad button", 10);
@@ -660,28 +774,71 @@ static LONG best_pen(ULONG r, ULONG g, ULONG b)
                          OBP_Precision, PRECISION_GUI, TAG_END);
 }
 
+/* a gadget of the pad window (or the menu item standing for one); 1 = close it */
+static int pad_action(int i, UWORD code)
+{
+    if (i >= P_SET && i < P_SET + NROWS) {
+        if (setrow == i - P_SET) { learnall = 0; set_done(0); }   /* Set again: leave it */
+        else { learnall = 0; set_start(i - P_SET); }
+        return 0;
+    }
+    switch (i) {
+    case P_PAD:
+        if (code < npads_now) { curpad = code; setrow = -1; learnall = 0; show_pad(); }
+        break;
+    case P_LEARN:
+        if (pads[curpad].present) { learnall = 1; set_start(0); }
+        break;
+    case P_BUILTIN:
+        if (pads[curpad].present) {
+            memcpy(pads[curpad].pos, pads[curpad].builtin, NPLACES);
+            pads[curpad].own = 0; pads[curpad].changed = 1;
+            setrow = -1; learnall = 0;
+            show_pad();
+        }
+        break;
+    case P_SAVE:
+        if (!pads_apply(1)) { pad_info("Could not save the buttons."); break; }
+        message("Game pad buttons saved."); return 1;
+    case P_USE:
+        if (!pads_apply(0)) { pad_info("Could not set the buttons."); break; }
+        message("Game pad buttons in use until the next reboot."); return 1;
+    case P_CANCEL: return 1;
+    }
+    return 0;
+}
+
 static void pad_window(struct MsgPort *tport, struct timerequest *treq)
 {
-    int w, h, done = 0, r, i;
+    int w, h, done = 0, r, left, top;
     struct TextFont *tf = NULL;
 
     pads_refresh(1);
     curpad = 0;
     for (r = 0; r < NROWS; r++) { pfield[r][0] = 0; lamp_lit[r] = 0; }
     strcpy(pnow, "-"); pinfo[0] = 0;
-    if (!make_padgadgets(&w, &h)) { FreeGadgets(pglist); pglist = NULL; message("Could not open the game pad window."); return; }
+    /* a small screen (640x200, say): the compact layout */
+    if (!make_padgadgets(&w, &h, 0) || h > scr->Height - scr->BarHeight - 1) {
+        FreeGadgets(pglist); pglist = NULL;
+        if (!make_padgadgets(&w, &h, 1)) { FreeGadgets(pglist); pglist = NULL; message("Could not open the game pad window."); return; }
+    }
+    left = win->LeftEdge + 20 < scr->Width - w ? win->LeftEdge + 20 : 0;
+    top = win->TopEdge + 20 < scr->Height - h ? win->TopEdge + 20 : scr->BarHeight + 1;
+    if (top + h > scr->Height) top = scr->Height - h > 0 ? scr->Height - h : 0;
     pwin = OpenWindowTags(NULL,
         WA_Title, (ULONG)"ZZPlug - Game pad buttons",
-        WA_Left, (ULONG)(win->LeftEdge + 20 < scr->Width - w ? win->LeftEdge + 20 : 0),
-        WA_Top, (ULONG)(win->TopEdge + 20 < scr->Height - h ? win->TopEdge + 20 : scr->BarHeight + 1),
+        WA_Left, (ULONG)left, WA_Top, (ULONG)top,
         WA_Width, (ULONG)w, WA_Height, (ULONG)h,
         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE, WA_Activate, TRUE,
-        WA_SimpleRefresh, TRUE,
-        WA_IDCMP, (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY | BUTTONIDCMP | CYCLEIDCMP),
+        WA_SimpleRefresh, TRUE, WA_NewLookMenus, TRUE,
+        WA_IDCMP, (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY | IDCMP_MENUPICK |
+                          BUTTONIDCMP | CYCLEIDCMP),
         WA_Gadgets, (ULONG)pglist,
         WA_PubScreen, (ULONG)scr,
         TAG_END);
     if (!pwin) { FreeGadgets(pglist); pglist = NULL; message("Could not open the game pad window."); return; }
+    if (pad_menu) SetMenuStrip(pwin, pad_menu);
+    if (main_menu) ClearMenuStrip(win);         /* the main window waits meanwhile */
     if ((tf = OpenFont(font))) SetFont(pwin->RPort, tf);
     pen_lit = best_pen(60, 220, 90); pen_off = best_pen(80, 80, 80);
     pen_sw[0] = best_pen(220, 40, 40); pen_sw[1] = best_pen(40, 80, 220);
@@ -724,38 +881,42 @@ static void pad_window(struct MsgPort *tport, struct timerequest *treq)
             case IDCMP_VANILLAKEY:
                 if (code == 27) done = 1;
                 break;
-            case IDCMP_GADGETUP:
-                i = gad->GadgetID;
-                if (i >= P_SET && i < P_SET + NROWS) {
-                    if (setrow == i - P_SET) { learnall = 0; set_done(0); }   /* Set again: leave it */
-                    else { learnall = 0; set_start(i - P_SET); }
-                } else switch (i) {
-                case P_PAD:
-                    if (code < npads_now) { curpad = code; setrow = -1; learnall = 0; show_pad(); }
-                    break;
-                case P_LEARN:
-                    if (pads[curpad].present) { learnall = 1; set_start(0); }
-                    break;
-                case P_BUILTIN:
-                    if (pads[curpad].present) {
-                        memcpy(pads[curpad].pos, pads[curpad].builtin, NPLACES);
-                        pads[curpad].own = 0; pads[curpad].changed = 1;
-                        setrow = -1; learnall = 0;
-                        show_pad();
+            case IDCMP_MENUPICK:
+                while (code != MENUNULL && !done) {
+                    struct MenuItem *it = ItemAddress(pad_menu, code);
+                    if (!it) break;
+                    switch ((ULONG)GTMENUITEM_USERDATA(it)) {
+                    case MN_ABOUT: about(pwin); break;
+                    case MN_SAVE: done = pad_action(P_SAVE, 0); break;
+                    case MN_USE: done = pad_action(P_USE, 0); break;
+                    case MN_QUIT: done = 1; break;
+                    case MN_DEFAULTS: pad_action(P_BUILTIN, 0); break;
+                    case MN_LASTSAVED:
+                        if (pad_last_saved(&pads[curpad])) {
+                            setrow = -1; learnall = 0; show_pad();
+                            pad_info(pads[curpad].own ? "The buttons last saved for this pad." :
+                                                        "None saved for this pad: the built-in buttons.");
+                        }
+                        break;
+                    case MN_RESTORE: {
+                        struct pad p;
+                        ULONG out[4];
+                        if (pads[curpad].present && pad_read(curpad, &p, out)) {
+                            pads[curpad] = p;
+                            setrow = -1; learnall = 0; show_pad();
+                        }
+                        break; }
                     }
-                    break;
-                case P_SAVE:
-                    if (!pads_apply(1)) { pad_info("Could not save the buttons."); break; }
-                    message("Game pad buttons saved."); done = 1; break;
-                case P_USE:
-                    if (!pads_apply(0)) { pad_info("Could not set the buttons."); break; }
-                    message("Game pad buttons in use until the next reboot."); done = 1; break;
-                case P_CANCEL: done = 1; break;
+                    code = it->NextSelect;
                 }
+                break;
+            case IDCMP_GADGETUP:
+                done = pad_action(gad->GadgetID, code);
                 break;
             }
         }
     }
+    if (main_menu) SetMenuStrip(win, main_menu);
     if (IntuitionBase->LibNode.lib_Version >= 39) SetWindowPointer(win, WA_Pointer, 0UL, TAG_END);
     if (GfxBase->LibNode.lib_Version >= 39) {
         struct ColorMap *cm = scr->ViewPort.ColorMap;
@@ -765,22 +926,27 @@ static void pad_window(struct MsgPort *tport, struct timerequest *treq)
     }
     pen_lit = pen_off = -1;
     for (r = 0; r < 4; r++) pen_sw[r] = -1;
+    if (pad_menu) ClearMenuStrip(pwin);
     CloseWindow(pwin); pwin = NULL;
     if (tf) CloseFont(tf);
     FreeGadgets(pglist); pglist = NULL;
     setrow = -1; learnall = 0;
 }
 
+static ULONG parse_dostype(const char *p)
+{
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
+    return strtoul(p, NULL, 16);
+}
+
+static ULONG dostype_start;                     /* as it was when the window opened (Edit > Restore) */
+
 static void load_settings(void)
 {
     char v[64];
     LONG n = GetVar((STRPTR)VAR_DOSTYPE, (STRPTR)v, sizeof(v), GVF_GLOBAL_ONLY);
-    dostype = 0;
-    if (n > 0) {
-        const char *p = v;
-        if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) p += 2;
-        dostype = strtoul(p, NULL, 16);
-    }
+    dostype = n > 0 ? parse_dostype(v) : 0;
+    dostype_start = dostype;
     fatlabels[0] = (STRPTR)"CrossDOS (comes with AmigaOS)";
     fatlabels[1] = (STRPTR)"fat95 (L:fat95)";
     fatlabels[2] = NULL;
@@ -790,6 +956,43 @@ static void load_settings(void)
         fatlabels[2] = (STRPTR)fatlabel_other;
         fatlabels[3] = NULL;
         fatactive = 2;
+    }
+}
+
+/* Edit menu: show d (0 = the default, CrossDOS) in the FAT gadget. A DosType
+ * other than CrossDOS/fat95 can only be shown if the window opened with one
+ * (the cycle gadget's choices are fixed on 2.04/3.0); 0 = it could not. */
+static int set_dostype(ULONG d)
+{
+    if (d == DOSTYPE_CROSSDOS) d = 0;
+    if (!d) fatactive = 0;
+    else if (d == DOSTYPE_FAT95) fatactive = 1;
+    else if (fatlabels[2]) {
+        dostype = d;
+        sprintf(fatlabel_other, "Other: DosType 0x%08lX", (unsigned long)dostype);
+        fatactive = 2;
+    } else return 0;
+    if (gFat) GT_SetGadgetAttrs(gFat, win, NULL, GTCY_Active, (ULONG)fatactive, TAG_END);
+    return 1;
+}
+
+static void edit_menu(ULONG id)
+{
+    char v[64];
+    switch (id) {
+    case MN_DEFAULTS:
+        set_dostype(0);
+        message("Defaults: FAT sticks mount with CrossDOS.");
+        break;
+    case MN_LASTSAVED:
+        if (!read_envarc(VAR_DOSTYPE, v, sizeof(v))) { set_dostype(0); message("Last saved: CrossDOS (none saved)."); }
+        else if (set_dostype(parse_dostype(v))) message("The settings last saved.");
+        else message("Last saved is a DosType this window cannot show - left as it is.");
+        break;
+    case MN_RESTORE:
+        set_dostype(dostype_start);
+        message("The settings as they were when ZZPlugPrefs opened.");
+        break;
     }
 }
 
@@ -866,19 +1069,29 @@ static int tlen(const char *s)
     return n;
 }
 
-static int make_gadgets(int *pw, int *ph)
+/* compact = the layout for a small screen (640x200 with Topaz 8): tighter
+ * rows, and the lists get what height is left */
+static int make_gadgets(int *pw, int *ph, int compact)
 {
     struct NewGadget ng;
     struct Gadget *g;
-    int fh = font->ta_YSize, gh = fh + 6, row = gh + 4;
+    int fh = font->ta_YSize, gh = fh + (compact ? 4 : 6), row = gh + (compact ? 2 : 4);
     int cw = tlen("abcdefghijklmnopqrstuvwxyzABCDEFGHIJ") / 36 + 1;
-    int bl = scr->WBorLeft + 6, bt = scr->WBorTop + fh + 1 + 6;
-    int iw = cw * 84, lw, lvh, y, labw, bw, x;
+    int bl = scr->WBorLeft + 6, bt = title_h() + (compact ? 3 : 6);
+    int iw = cw * 84, lw, lvh, y, labw, bw, x, lines = 9;
 
     if (iw < 560) iw = 560;
+    if (iw > scr->Width - bl - 6 - scr->WBorRight) iw = scr->Width - bl - 6 - scr->WBorRight;
     lw = iw * 52 / 100;
     labw = tlen("Game pad now") + 12;
-    lvh = (fh + 1) * 9 + 4;
+    if (compact) {                              /* everything but the lists, then lines to fill the rest */
+        int fixed = bt + row + (fh + 2) + 4 + 5 * row + gh + 3 + scr->WBorBottom;
+        int room = scr->Height - scr->BarHeight - 1 - fixed;
+        lines = (room - 4) / (fh + 1);
+        if (lines > 9) lines = 9;
+        if (lines < 3) lines = 3;
+    }
+    lvh = (fh + 1) * lines + 4;
 
     g = CreateContext(&glist);
     memset(&ng, 0, sizeof(ng));
@@ -897,7 +1110,7 @@ static int make_gadgets(int *pw, int *ph)
     g = gStop = CreateGadget(BUTTON_KIND, g, &ng, GA_Disabled, running != 1, TAG_END);
 
     /* the device list and the details */
-    y += row + fh + 4;
+    y += row + fh + (compact ? 2 : 4);
     ng.ng_LeftEdge = bl; ng.ng_TopEdge = y; ng.ng_Width = lw; ng.ng_Height = lvh;
     ng.ng_GadgetText = (STRPTR)"Plugged in"; ng.ng_Flags = PLACETEXT_ABOVE | NG_HIGHLABEL; ng.ng_GadgetID = G_DEVS;
     g = gDevs = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels, (ULONG)&devs.list, GTLV_ShowSelected, 0UL,
@@ -905,7 +1118,7 @@ static int make_gadgets(int *pw, int *ph)
     ng.ng_LeftEdge = bl + lw + 8; ng.ng_Width = iw - lw - 8;
     ng.ng_GadgetText = (STRPTR)"Details"; ng.ng_GadgetID = G_DETAIL;
     g = gDetail = CreateGadget(LISTVIEW_KIND, g, &ng, GTLV_Labels, (ULONG)&detail.list, GTLV_ReadOnly, TRUE, TAG_END);
-    y += lvh + 8;
+    y += lvh + (compact ? 4 : 8);
 
     /* settings */
     ng.ng_Flags = PLACETEXT_LEFT;
@@ -939,7 +1152,7 @@ static int make_gadgets(int *pw, int *ph)
     ng.ng_LeftEdge = bl; ng.ng_Width = iw; ng.ng_GadgetText = NULL; ng.ng_GadgetID = G_MSG;
     ng.ng_TopEdge = y;
     g = gMsg = CreateGadget(TEXT_KIND, g, &ng, GTTX_Text, (ULONG)msgtext, TAG_END);
-    y += row + 4;
+    y += row + (compact ? 0 : 4);
 
     /* Save / Use / Cancel */
     bw = tlen("Cancel") + 32;
@@ -954,8 +1167,44 @@ static int make_gadgets(int *pw, int *ph)
     y += gh;
 
     *pw = bl + iw + 6 + scr->WBorRight;
-    *ph = y + 6 + scr->WBorBottom;
+    *ph = y + (compact ? 3 : 6) + scr->WBorBottom;
     return g != NULL;
+}
+
+/* a gadget of the main window (or the menu item standing for one); 1 = quit */
+static int main_action(int id, UWORD code, struct MsgPort *tport, struct timerequest *treq)
+{
+    switch (id) {
+    case G_DEVS:
+        if (code < devs.n && devidx[code] >= 0) { selected = code; seldev = devidx[code]; show_detail(1); }
+        break;
+    case G_START: start_zzplug(); refresh_list(1); break;
+    case G_STOP: stop_zzplug(); Delay(25); refresh_list(1); break;
+    case G_FAT:
+        fatactive = code;
+        if (code == 1) {
+            BPTR lk = Lock((STRPTR)"L:fat95", ACCESS_READ);
+            if (lk) { UnLock(lk); message("New FAT sticks will mount with fat95."); }
+            else message("L:fat95 is not installed - sticks would not mount with it.");
+        } else
+            message(code ? "" : "New FAT sticks will mount with CrossDOS.");
+        break;
+    case G_RECORD:
+        record_device();
+        break;
+    case G_PADWIN:
+        pad_window(tport, treq);
+        pads_summary();
+        break;
+    case G_SAVE:
+        if (!apply(1)) { message("Could not save the settings."); break; }
+        return 1;
+    case G_USE:
+        if (!apply(0)) { message("Could not set the settings."); break; }
+        return 1;
+    case G_CANCEL: return 1;
+    }
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -987,22 +1236,31 @@ int main(void)
     font = scr->Font;
     running = zzplug_running();
     statetext[0] = 0;
-    if (!make_gadgets(&w, &h) || w > scr->Width || h > scr->Height) {   /* too big: the small font */
-        FreeGadgets(glist); glist = NULL;
-        font = &topaz8;
-        if (!make_gadgets(&w, &h)) goto out;
+    {   /* the screen's font, then compact, then Topaz 8, then Topaz 8 compact: the first that fits */
+        int k, made = 0, fits = 0;
+        for (k = 0; k < 4 && !fits; k++) {          /* none fits: the last (smallest) one stays */
+            if (glist) { FreeGadgets(glist); glist = NULL; }
+            font = k < 2 ? scr->Font : &topaz8;
+            made = make_gadgets(&w, &h, k & 1);
+            fits = made && w <= scr->Width && h <= scr->Height - scr->BarHeight - 1;
+        }
+        if (!made) goto out;
     }
     win = OpenWindowTags(NULL,
         WA_Title, (ULONG)"ZZPlug - USB on the ZZ9000",
-        WA_Left, (ULONG)((scr->Width - w) / 2), WA_Top, (ULONG)(scr->BarHeight + 1),
+        WA_Left, (ULONG)(w < scr->Width ? (scr->Width - w) / 2 : 0),
+        WA_Top, (ULONG)(h <= scr->Height - scr->BarHeight - 1 ? scr->BarHeight + 1 : 0),
         WA_Width, (ULONG)w, WA_Height, (ULONG)h,
         WA_DragBar, TRUE, WA_DepthGadget, TRUE, WA_CloseGadget, TRUE, WA_Activate, TRUE,
-        WA_SimpleRefresh, TRUE,
-        WA_IDCMP, (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY | BUTTONIDCMP | LISTVIEWIDCMP | CYCLEIDCMP),
+        WA_SimpleRefresh, TRUE, WA_NewLookMenus, TRUE,
+        WA_IDCMP, (ULONG)(IDCMP_CLOSEWINDOW | IDCMP_REFRESHWINDOW | IDCMP_VANILLAKEY | IDCMP_MENUPICK |
+                          BUTTONIDCMP | LISTVIEWIDCMP | CYCLEIDCMP),
         WA_Gadgets, (ULONG)glist,
         WA_PubScreen, (ULONG)scr,
         TAG_END);
     if (!win) goto out;
+    if ((main_menu = make_menu(main_menu_def))) SetMenuStrip(win, main_menu);
+    pad_menu = make_menu(pad_menu_def);
     GT_RefreshWindow(win, NULL);
     running = -1;
     refresh_list(1);
@@ -1036,37 +1294,28 @@ int main(void)
             case IDCMP_VANILLAKEY:
                 if (code == 27) done = 1;
                 break;
-            case IDCMP_GADGETUP:
-                switch (gad->GadgetID) {
-                case G_DEVS:
-                    if (code < devs.n && devidx[code] >= 0) { selected = code; seldev = devidx[code]; show_detail(1); }
-                    break;
-                case G_START: start_zzplug(); refresh_list(1); break;
-                case G_STOP: stop_zzplug(); Delay(25); refresh_list(1); break;
-                case G_FAT:
-                    fatactive = code;
-                    if (code == 1) {
-                        BPTR lk = Lock((STRPTR)"L:fat95", ACCESS_READ);
-                        if (lk) { UnLock(lk); message("New FAT sticks will mount with fat95."); }
-                        else message("L:fat95 is not installed - sticks would not mount with it.");
-                    } else
-                        message(code ? "" : "New FAT sticks will mount with CrossDOS.");
-                    break;
-                case G_RECORD:
-                    record_device();
-                    break;
-                case G_PADWIN:
-                    pad_window(tport, treq);
-                    pads_summary();
-                    break;
-                case G_SAVE:
-                    if (!apply(1)) { message("Could not save the settings."); break; }
-                    done = 1; break;
-                case G_USE:
-                    if (!apply(0)) { message("Could not set the settings."); break; }
-                    done = 1; break;
-                case G_CANCEL: done = 1; break;
+            case IDCMP_MENUPICK:
+                while (code != MENUNULL && !done) {
+                    struct MenuItem *it = ItemAddress(main_menu, code);
+                    ULONG id;
+                    if (!it) break;
+                    id = (ULONG)GTMENUITEM_USERDATA(it);
+                    code = it->NextSelect;      /* read first: the pad window swaps the menu strip */
+                    switch (id) {
+                    case MN_ABOUT: about(win); break;
+                    case MN_SAVE: done = main_action(G_SAVE, 0, tport, treq); break;
+                    case MN_USE: done = main_action(G_USE, 0, tport, treq); break;
+                    case MN_QUIT: done = 1; break;
+                    case MN_DEFAULTS: case MN_LASTSAVED: case MN_RESTORE: edit_menu(id); break;
+                    case MN_START: if (!zzplug_running()) main_action(G_START, 0, tport, treq); break;
+                    case MN_STOP: if (zzplug_running()) main_action(G_STOP, 0, tport, treq); break;
+                    case MN_PADS: main_action(G_PADWIN, 0, tport, treq); break;
+                    case MN_RECORD: main_action(G_RECORD, 0, tport, treq); break;
+                    }
                 }
+                break;
+            case IDCMP_GADGETUP:
+                done = main_action(gad->GadgetID, code, tport, treq);
                 break;
             }
         }
@@ -1074,6 +1323,7 @@ int main(void)
     rc = RETURN_OK;
 
 out:
+    if (win && main_menu) ClearMenuStrip(win);
     if (sent) {
         AbortIO((struct IORequest *)treq);
         WaitIO((struct IORequest *)treq);
@@ -1082,6 +1332,8 @@ out:
     if (treq) DeleteIORequest((struct IORequest *)treq);
     if (tport) DeleteMsgPort(tport);
     if (win) CloseWindow(win);
+    if (main_menu) FreeMenus(main_menu);
+    if (pad_menu) FreeMenus(pad_menu);
     if (glist) FreeGadgets(glist);
     if (vi) FreeVisualInfo(vi);
     if (scr) UnlockPubScreen(NULL, scr);
