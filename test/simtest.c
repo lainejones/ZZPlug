@@ -195,6 +195,36 @@ int main(void)
               "button 5 down and two wheel clicks down");
         n = zzp_mouse_release(&mo, ev);
         CHECK(n == 1 && ev[0].code == (ZC_BUTTON5 | ZC_UP) && mo.full, "unplugged: button 5 goes up, the mouse stays full");
+        {   /* like a Logitech 046D:C05A: the mouse report has no ID, a later collection has Report ID 0x10 */
+            static const uint8_t ld[] = {
+                0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+                0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x15, 0x00, 0x25, 0x01, 0x95, 0x08, 0x75, 0x01, 0x81, 0x02,
+                0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38, 0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+                0xC0, 0xC0,
+                0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x10, 0x75, 0x08, 0x95, 0x06, 0x15, 0x00, 0x26, 0xFF, 0x00,
+                0x09, 0x01, 0x81, 0x00, 0xC0 };
+            uint8_t up[4] = { 0x00, 0x00, 0xC7, 0x00 };     /* straight up: Y -57, no buttons */
+            zzp_mouse_init(&mo, &sh);
+            CHECK(zzp_mousemap_parse(&mo.map, ld, sizeof(ld)) && mo.map.uses_ids && mo.map.x.report_id == 0,
+                  "a mouse report without an ID, in a descriptor that has one elsewhere");
+            mo.full = 1;
+            n = zzp_mouse_report(&mo, up, 4, ev);
+            CHECK(n == 1 && ev[0].cls == ZE_RAWMOUSE && ev[0].code == ZC_NOBUTTON && ev[0].dx == 0 && ev[0].dy == -57,
+                  "it is read without an ID byte: straight up, no button");
+        }
+        {   /* like 1EA7:0066: the descriptor has Report ID 1, the receiver sends boot reports anyway */
+            uint8_t br[4] = { 0x00, 0xFE, 0x00, 0x00 }, side[4] = { 0x08, 0, 0, 0 };
+            int k;
+            zzp_mouse_init(&mo, &sh);
+            zzp_mousemap_parse(&mo.map, md, sizeof(md));
+            mo.map.uses_ids = 1; mo.map.x.report_id = 1;     /* as if the descriptor said Report ID 1 */
+            mo.full = 1;
+            for (k = 0; k < 2; k++) CHECK(zzp_mouse_report(&mo, br, 4, ev) == 0, "a boot-looking report: not yet");
+            n = zzp_mouse_report(&mo, br, 4, ev);
+            CHECK(!mo.full && n == 1 && ev[0].dx == -2, "the third: read as a boot mouse from then on");
+            n = zzp_mouse_report(&mo, side, 4, ev);
+            CHECK(n == 1 && ev[0].code == ZC_BUTTON4, "a boot report's bit 3 is the fourth button");
+        }
     }
 
     printf("[keyboard reports]\n");

@@ -177,9 +177,11 @@ int zzp_padmap_order_for(uint16_t vid, uint16_t pid, uint8_t *order)
 static int32_t field(const struct zzp_field *f, const uint8_t *r, int len, int uses_ids)
 {
     uint32_t bit, v = 0, k;
-    int base = uses_ids ? 1 : 0;
+    /* a field declared before any Report ID item comes in reports without the ID byte,
+     * whatever the rest of the descriptor does (Logitech mice: 046D:C05A) */
+    int base = uses_ids && f->report_id ? 1 : 0;
     if (!f->present || f->size == 0 || f->size > 32) return 0;
-    if (uses_ids && (len < 1 || r[0] != f->report_id)) return 0;
+    if (base && (len < 1 || r[0] != f->report_id)) return 0;
     for (k = 0; k < f->size; k++) {
         bit = f->bit + k;
         if ((int)(base + bit / 8) >= len) return 0;
@@ -217,7 +219,7 @@ uint32_t zzp_pad_state(const struct zzp_padmap *m, const uint8_t *r, int len, ui
     uint16_t buttons = 0;
     int i, dx, dy;
 
-    if (m->uses_ids) {                          /* only the report that carries the pad */
+    if (m->uses_ids && (m->x.present ? m->x.report_id : m->hat.report_id)) {   /* only the report that carries the pad */
         uint8_t want = m->x.present ? m->x.report_id : m->hat.report_id;
         if (len < 1 || r[0] != want) return 0xffffffffUL;
     }

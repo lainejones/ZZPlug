@@ -397,7 +397,17 @@ static void write_env(void)
         if (d->kind == DRV_MOUSE)
             fprintf(f, "    %s\n", d->m.full ? (d->m.map.wheel.present ? "report protocol: wheel and up to 5 buttons"
                                                                       : "report protocol: up to 5 buttons")
-                                         : "boot protocol: 3 buttons");
+                                         : d->m.map.x.present ? "boot reports (it did not change to report protocol)"
+                                                              : "boot protocol: 3 buttons");
+        if (d->kind == DRV_MOUSE && d->m.full) {
+            const struct zzp_padmap *p = &d->m.map;
+            fprintf(f, "    map: ids %d, x %d/%d (%ld..%ld), y %d/%d, wheel %d/%d, pan %d/%d, buttons %d at %d, last",
+                    p->uses_ids, p->x.bit, p->x.size, (long)p->x.lmin, (long)p->x.lmax, p->y.bit, p->y.size,
+                    p->wheel.present ? p->wheel.bit : -1, p->wheel.size, p->pan.present ? p->pan.bit : -1, p->pan.size,
+                    p->nbuttons, p->button[0].bit);
+            for (k = 0; k < d->lastlen; k++) fprintf(f, " %02X", d->lastrep[k]);
+            fputc(10, f);
+        }
         if (d->kind == DRV_PAD) {
             fprintf(f, "    joystick port %d (lowlevel port %d): %d buttons, X %s, Y %s, hat %s; state %08lX; last report",
                     joy_port_of(d->slot) + 1, joy_port_of(d->slot), d->pm.nbuttons,
@@ -465,7 +475,11 @@ static void poll_endpoints(void)
         if (r == XS_OK) {
             d->reports++;
             d->fails = 0;
-            if (d->kind == DRV_MOUSE) inject(ev, zzp_mouse_report(&d->m, buf, (int)x.actual, ev));
+            if (d->kind == DRV_MOUSE) {
+                d->lastlen = x.actual < sizeof(d->lastrep) ? (int)x.actual : (int)sizeof(d->lastrep);
+                memcpy(d->lastrep, buf, (size_t)d->lastlen);
+                inject(ev, zzp_mouse_report(&d->m, buf, (int)x.actual, ev));
+            }
             else if (d->kind == DRV_KBD) { inject(ev, zzp_kbd_report(&d->k, buf, (int)x.actual, ev)); set_leds(d); }
             else if (d->kind == DRV_HUB && x.actual) rescan_wanted = 1;     /* a port changed */
             else if (d->kind == DRV_PAD) {

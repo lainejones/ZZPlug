@@ -62,6 +62,7 @@ struct zzp_mouse {
     uint8_t buttons;
     struct zzp_hid_shared *sh;
     int full;                   /* 1 = report protocol, read with map; 0 = the 3-byte boot report */
+    uint8_t idseen, misses;     /* full: a report with the mouse's ID came; boot-looking ones before it */
     struct zzp_padmap map;
 };
 

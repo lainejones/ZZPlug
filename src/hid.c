@@ -89,7 +89,15 @@ int zzp_mouse_report(struct zzp_mouse *m, const uint8_t *r, int len, struct zzp_
 
     if (m->full) {                              /* report protocol: where the descriptor says */
         const struct zzp_padmap *p = &m->map;
-        if (p->uses_ids && (len < 1 || r[0] != p->x.report_id)) return 0;   /* another report */
+        if (p->uses_ids && p->x.report_id && (len < 1 || r[0] != p->x.report_id)) {
+            /* not the mouse's report: another one of the device's, or a receiver that said yes to
+             * report protocol and kept sending boot reports (1EA7:0066) - after a few of those with
+             * none of its own, read it as a boot mouse from then on */
+            if (m->idseen || len < 3 || len > 8 || ++m->misses < 3) return 0;
+            m->full = 0;
+            return zzp_mouse_report(m, r, len, ev);
+        }
+        m->idseen = 1;
         b = 0;
         for (i = 0; i < 5 && i < p->nbuttons; i++)
             if (zzp_field_value(&p->button[i], r, len, p->uses_ids)) b |= (uint8_t)(1 << i);
@@ -101,7 +109,7 @@ int zzp_mouse_report(struct zzp_mouse *m, const uint8_t *r, int len, struct zzp_
         pan = zzp_field_value(&p->pan, r, len, p->uses_ids);
     } else {
         if (len < 3) return 0;
-        b = (uint8_t)(r[0] & 7);
+        b = (uint8_t)(r[0] & (len >= 4 ? 0x1f : 7));   /* longer boot reports: side buttons in bits 3-4 */
         dx = (int8_t)r[1];
         dy = (int8_t)r[2];
         if (len >= 4) wheel = (int8_t)r[3];     /* boot mice that send their wheel anyway */
