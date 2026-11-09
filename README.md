@@ -119,6 +119,12 @@ kind of pad keeps its own layout.
   unplugged and plugged in again.** A warm reboot keeps it. This is in the
   ZZ9000 firmware's USB start-up, reported as
   [zz9000-firmware#194](https://github.com/BlitterStudio/zz9000-firmware/issues/194).
+- **ZZFwUpdate and USB share one buffer on the card.** ZZPlug 0.8.2 and newer
+  pause their USB requests while ZZFwUpdate runs; older versions could
+  overwrite part of the firmware being uploaded, and the card then fails to
+  start. With 0.8 or 0.8.1, run `ZZPlug STOP` before ZZFwUpdate. Poseidon's
+  zzusbhw.device uses the same buffer, so quit Poseidon before a firmware
+  update as well.
 - Games that read the joystick hardware directly don't see a USB pad; programs
   that ask lowlevel.library do (system-friendly games, CD32 titles, emulators).
 - Keyboards are driven in boot protocol: their extra keys (media, power) are

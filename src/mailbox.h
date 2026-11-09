@@ -10,6 +10,7 @@ struct zzp_mailbox {
     volatile UBYTE *base;       /* the card's register base */
     volatile UBYTE *ap;         /* base + 0xA000: the USB aperture */
     ULONG request_id, epoch, caps;
+    ULONG fwup_waits;           /* times a request waited for ZZFwUpdate to finish */
     UWORD zorro;                /* 2 or 3 */
     struct MsgPort *tport;
     struct timerequest *treq;

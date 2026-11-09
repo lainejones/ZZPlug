@@ -422,6 +422,8 @@ static void write_env(void)
         }
     }
     fprintf(f, "  USB interrupts: %lu\n", (unsigned long)mb_irq_count(MB));
+    if (MB->fwup_waits)
+        fprintf(f, "  paused for ZZFwUpdate: %lu times\n", (unsigned long)MB->fwup_waits);
     write_sticks(f);
     if (B.kicked) fprintf(f, "  (the port looked empty at start; a port reset found the device)\n");
     fclose(f);

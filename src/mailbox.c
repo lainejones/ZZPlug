@@ -13,6 +13,7 @@
 #include <devices/timer.h>
 #include <libraries/configvars.h>
 #include <exec/interrupts.h>
+#include <dos/dosextens.h>
 #include <hardware/intbits.h>
 #include <proto/exec.h>
 #include <proto/dos.h>
@@ -122,9 +123,53 @@ static int request(struct zzp_mailbox *m, UWORD cmd, volatile UBYTE *hdr_fill, U
     return status;
 }
 
+/* Is ZZFwUpdate running in some Shell? It stages each firmware chunk in the
+ * same base+0xA000 buffer this file writes its requests to, and the firmware
+ * only copies the chunk out when the WRITE command arrives: a request of ours
+ * in between replaced the chunk's first 64 bytes with our header, and the card
+ * then booted a broken BOOT.bin (zz9000-firmware#194, 2026-11-09). ZZFwUpdate
+ * runs inside the Shell's own process (no task of its own), so look at the
+ * command each Shell is running. */
+static int fwupdate_running(void)
+{
+    static const char want[] = "zzfwupdate";
+    LONG i, n;
+    int busy = 0;
+
+    if (((struct Library *)DOSBase)->lib_Version < 36) return 0;
+    Forbid();
+    n = MaxCli();
+    for (i = 1; i <= n && !busy; i++) {
+        struct Process *p = FindCliProc(i);
+        struct CommandLineInterface *cli;
+        const UBYTE *b;
+        int len, k, j;
+        if (!p || !(cli = (struct CommandLineInterface *)BADDR(p->pr_CLI)) || !cli->cli_Module) continue;
+        if (!(b = (const UBYTE *)BADDR(cli->cli_CommandName))) continue;
+        len = b[0];
+        for (k = len; k > 0 && b[k] != '/' && b[k] != ':'; k--)
+            ;
+        if (len - k != (int)sizeof(want) - 1) continue;
+        for (j = 0; j < (int)sizeof(want) - 1; j++) {
+            UBYTE c = b[k + 1 + j];
+            if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+            if (c != (UBYTE)want[j]) break;
+        }
+        busy = j == (int)sizeof(want) - 1;
+    }
+    Permit();
+    return busy;
+}
+
+/* every request path starts here: hold off while a firmware upload runs */
 static void clear_header(struct zzp_mailbox *m)
 {
     int i;
+    if (fwupdate_running()) {
+        m->fwup_waits++;
+        while (fwupdate_running())
+            wait_us(m, 100000);
+    }
     for (i = 4; i < HDR; i += 2)
         w16(m->ap + i, 0);
 }
