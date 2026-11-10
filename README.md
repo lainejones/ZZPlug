@@ -119,6 +119,8 @@ kind of pad keeps its own layout.
   unplugged and plugged in again.** A warm reboot keeps it. This is in the
   ZZ9000 firmware's USB start-up, reported as
   [zz9000-firmware#194](https://github.com/BlitterStudio/zz9000-firmware/issues/194).
+- **Tested with USB 2.0 hubs only.** A USB 1.1 hub may not work with mice
+  and keyboards behind it.
 - **ZZFwUpdate and USB share one buffer on the card.** ZZPlug 0.8.2 and newer
   pause their USB requests while ZZFwUpdate runs; older versions could
   overwrite part of the firmware being uploaded, and the card then fails to
