@@ -206,6 +206,12 @@ static int mb_periodic(void *ctx, int op, struct zzp_xfer *x, uint16_t interval,
     int r;
 
     x->type = XT_INTERRUPT;
+    /* The firmware (ehci_periodic_build_plan) moves the complete-split window
+     * later by the hub's TT think time; EHCI wants it at start+2..start+4
+     * whatever the think time. A hub that reports think time 3 (Genesys
+     * GL850G) then gets every split interrupt poll back as an error. The
+     * think time only matters for TT budgeting, so send 0 here. */
+    x->tt_think = 0;
     fill_header(m, x);
     w16(m->ap + 30, interval);
     w16(m->ap + 46, generation);
