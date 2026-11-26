@@ -51,6 +51,7 @@ struct drv {
     uint16_t maxpkt, interval;
     uint8_t leds;
     uint8_t fails;
+    uint8_t stopped;            /* failed 20 times in a row: no longer polled until the next scan */
     uint32_t reports, naks, errors;
     int last;                   /* the last status other than NAK */
     struct zzp_mouse m;
@@ -398,6 +399,8 @@ static void write_env(void)
                 i, kind[d->kind], B.dev[d->dev].addr, d->ep & 15, d->interval,
                 B.dev[d->dev].speed == SPEED_HIGH ? "microframes" : "ms",
                 (unsigned long)d->reports, (unsigned long)d->naks, (unsigned long)d->errors, zzp_status_name(d->last));
+        if (d->stopped)
+            fprintf(f, "    stopped: it failed 20 times in a row (unplug it and plug it in again to retry)\n");
         if (d->kind == DRV_MOUSE)
             fprintf(f, "    %s\n", d->m.full ? (d->m.map.wheel.present ? "report protocol: wheel and up to 5 buttons"
                                                                       : "report protocol: up to 5 buttons")
@@ -504,6 +507,7 @@ static void poll_endpoints(void)
 
     for (i = 0; i < ND; i++) {
         struct drv *d = &D[i];
+        if (d->stopped) continue;
         ep_xfer(d, &x, buf, d->maxpkt > sizeof(buf) ? sizeof(buf) : d->maxpkt);
         r = T.periodic(T.ctx, PO_REAP, &x, d->interval, generation);
         if (r == XS_NAK) { d->naks++; continue; }
@@ -529,7 +533,18 @@ static void poll_endpoints(void)
                 if (s != 0xffffffffUL) { d->state = s; joy_set(d->slot, 1, s); }
             }
         } else if (++d->fails > 20) {
-            rescan_wanted = 1;                  /* the device keeps failing: it is probably gone */
+            /* The device keeps failing. If it was unplugged, its hub (or the
+             * root port check) reports that and the next scan drops it. A
+             * device that is still there but fails every poll used to make
+             * this rescan the whole bus over and over, which once froze an
+             * A4000 (GL850G hub, 2026-11-25): stop polling it instead. */
+            ep_xfer(d, &x, NULL, d->maxpkt);
+            T.periodic(T.ctx, PO_STOP, &x, d->interval, generation);
+            d->stopped = 1;
+            if (d->kind == DRV_MOUSE) inject(ev, zzp_mouse_release(&d->m, ev));
+            if (d->kind == DRV_KBD) inject(ev, zzp_kbd_release(&d->k, ev));
+            if (d->kind == DRV_PAD) joy_set(d->slot, 1, 0);
+            continue;
         }
         if (arm(d) == XS_STALE) rescan_wanted = 1;
     }
